@@ -134,8 +134,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", help="記録の保存先")
     ap.add_argument("--rule", help="このルールだけ集計（例: ガチエリア）")
+    ap.add_argument("--include-interrupted", action="store_true", help="勝敗が出ないまま終わった試合も含める")
     a = ap.parse_args()
     ms = [m for m in Store(a.data).matches() if m.get("video_end")]
+    if not a.include_interrupted:
+        ms = [m for m in ms if not m.get("interrupted")]
     if a.rule:
         ms = [m for m in ms if m.get("rule") == a.rule]
     if not ms:

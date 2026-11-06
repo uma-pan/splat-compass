@@ -12,6 +12,7 @@ END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えてい
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
+MASS_DEATH = 5       # 同時にこの人数以上が倒れたら、画面の切り替わりとみなす
 
 KIND_LABEL = {
     "dead": "倒された",
@@ -46,6 +47,7 @@ class Match:
     end: float = None
     rule: str = None
     result: str = None
+    interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
     events: list = field(default_factory=list)
 
 
@@ -134,6 +136,7 @@ class Tracker:
 
     def _close_finished(self):
         m, self.finished = self.finished, None
+        m.interrupted = m.result is None
         self.on_match_end(m)
 
     def flush(self):
@@ -159,6 +162,10 @@ class Tracker:
         if self.pend_n < STABLE:
             return
         old, new = self.cur, self.pend
+        if sum(a != DEAD and b == DEAD for a, b in zip(old, new)) >= MASS_DEATH:
+            # 5人以上が同時に倒れることはまずない。回線落ちなどで画面が暗くなったとみなして無視する
+            self.pend, self.pend_n = None, 0
+            return
         self.cur, self.pend, self.pend_n = new, None, 0
         if new[0] == SPECIAL and old[0] != SPECIAL:
             self.special_since = t

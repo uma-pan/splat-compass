@@ -34,6 +34,7 @@ class Store:
             "video_end": round(m.end, 1) if m.end is not None else None,
             "rule": m.rule,
             "result": m.result,
+            "interrupted": m.interrupted,
             "columns": ROW_HEADER,
             "events": [e.row() for e in m.events],
         }

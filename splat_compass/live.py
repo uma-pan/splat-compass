@@ -82,7 +82,8 @@ def worker(frames, store, source, out_q, stop):
             return
         when = dt.datetime.now() - dt.timedelta(seconds=(time.time() - began) - m.start) if source == "camera" else None
         p = store.save_match(m, source, when)
-        out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {m.result or '勝敗不明'} → 保存しました"))
+        res = m.result or "勝敗不明（中断扱い）"
+        out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {res} → 保存しました"))
         out_q.put(("saved", p))
 
     began = time.time()
