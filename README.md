@@ -19,6 +19,18 @@
 - `pip install -r requirements.txt`
 - 1920x1080 の映像（キャプチャーボード、OBS の仮想カメラ、または OBS の録画）
 
+## 入れ方と更新
+
+最初の1回だけ、`git clone` で取ってきます。
+
+```
+git clone https://github.com/uma-pan/splat-compass
+cd splat-compass
+pip install -r requirements.txt
+```
+
+あとは `start.bat` をダブルクリックすれば、最新版に更新してから読み取りを始めます。カメラ番号は `start.bat` の中の `set CAMERA=0` を書き換えてください。手で更新するときは、フォルダの中で `git pull` を実行します。
+
 ## 使い方
 
 ### その場で読む（キャプボ／OBS仮想カメラ）
