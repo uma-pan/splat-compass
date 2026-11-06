@@ -50,7 +50,10 @@ def status_text(tr, t):
         return "試合を待っています"
     if not c:
         return "試合中（表示の読み取り待ち）"
-    me = {DEAD: "復活待ち", SPECIAL: "スペシャルあり"}.get(c["me"], "")
+    if c["me"] is None:
+        me = "（まだ分かりません。一度倒されると分かります）"
+    else:
+        me = f"{tr.match.me_slot} " + {DEAD: "復活待ち", SPECIAL: "スペシャルあり"}.get(c["me"], "")
     hold = f"（{int(t - tr.special_since)}秒）" if tr.special_since is not None else ""
     rule = tr.match.rule or ""
     ally, enemy = c["alive"]
@@ -74,7 +77,7 @@ def worker(frames, store, source, out_q, stop):
     notices = Notices()
 
     def on_event(m, e):
-        if e.slot == "左1" or e.kind in ("dead", "dead_with_special"):
+        if e.slot == m.me_slot or e.kind in ("dead", "dead_with_special"):
             out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
 
     def on_end(m):

@@ -35,6 +35,7 @@ class Store:
             "rule": m.rule,
             "result": m.result,
             "interrupted": m.interrupted,
+            "me_slot": m.me_slot,
             "columns": ROW_HEADER,
             "events": [e.row() for e in m.events],
         }

@@ -4,12 +4,14 @@
 """
 from dataclasses import dataclass, field
 
-from .hud import DEAD, SLOT_NAMES, SPECIAL, ScreenReader, read_slots
+from .hud import DEAD, SLOT_NAMES, SPECIAL, ScreenReader, me_respawning, read_slots
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
+SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
+RESPAWN_AFTER = 8.0        # 復活待ち表示が出てから何秒以内に復活するか
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
 MASS_DEATH = 5       # 同時にこの人数以上が倒れたら、画面の切り替わりとみなす
@@ -27,7 +29,7 @@ KIND_LABEL = {
 class Event:
     t: float          # 映像の中の時刻（秒）
     rel: float        # 試合開始からの時刻（秒）
-    slot: str         # 左1〜右4（左1が自分）
+    slot: str         # 左1〜右4（自分の位置は試合ごとに違う。Match.me_slot を見る）
     kind: str         # KIND_LABEL のキー
     alive: tuple      # (味方の生存数, 敵の生存数)
     specials: tuple   # (味方のスペシャル準備数, 敵のスペシャル準備数)
@@ -47,6 +49,8 @@ class Match:
     end: float = None
     rule: str = None
     result: str = None
+    me_slot: str = None  # 自分の枠（自分が倒されたときの復活待ち表示から推定）
+    respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
     events: list = field(default_factory=list)
 
@@ -63,7 +67,8 @@ class Tracker:
         self.pend, self.pend_n = None, 0
         self.on_n, self.off_since = 0, None
         self.last_rule = (None, -1e9)   # (ルール名, 見た時刻)
-        self.special_since = None  # 自分のスペシャルが溜まった時刻
+        self.ready_at = [None] * 8  # 各枠のスペシャルが溜まった時刻
+        self.resp_prev = False
         self.last_t = 0.0
 
     # ---- 外から見る用 ----
@@ -78,8 +83,20 @@ class Tracker:
         return {
             "alive": (sum(x != DEAD for x in c[:4]), sum(x != DEAD for x in c[4:])),
             "specials": (sum(x == SPECIAL for x in c[:4]), sum(x == SPECIAL for x in c[4:])),
-            "me": c[0],
+            "me": c[self.me_index] if self.me_index is not None else None,
         }
+
+    @property
+    def me_index(self):
+        if self.match is None or self.match.me_slot is None:
+            return None
+        return SLOT_NAMES.index(self.match.me_slot)
+
+    @property
+    def special_since(self):
+        """自分のスペシャルが溜まった時刻（自分の枠が分かっていて、溜まっているときだけ）。"""
+        i = self.me_index
+        return self.ready_at[i] if i is not None else None
 
     # ---- 1コマごと ----
     def feed(self, t, img):
@@ -98,6 +115,11 @@ class Tracker:
                 return
         else:
             self.off_since = None
+        resp = me_respawning(img)
+        if resp and not self.resp_prev:
+            self.match.respawn_marks.append(t)
+            self._decide_self()
+        self.resp_prev = resp
         self._update_slots(t, slots)
 
     def _idle(self, t, img, known):
@@ -126,13 +148,41 @@ class Tracker:
             self.match.rule = self.last_rule[0]
         self.cur, self.pend, self.pend_n = None, None, 0
         self.on_n, self.off_since = 0, None
-        self.special_since = None
+        self.ready_at = [None] * 8
+        self.resp_prev = False
+
+    def _decide_self(self, final=False):
+        """自分の復活待ち表示が出た時刻と、味方の倒された・復活の時刻を照らし合わせて自分の枠を決める。
+
+        候補は「表示の少し前に倒されて、表示の時点でまだ倒れたまま」の枠。
+        試合の終わり（final=True）には「表示のあとすぐ復活した」ことも条件に加える。
+        候補が複数なら票を分け合う。
+        """
+        votes = {}
+        evs = [e for e in self.match.events if e.slot.startswith("左")]
+        for mk in self.match.respawn_marks:
+            cands = []
+            for slot in SLOT_NAMES[:4]:
+                mine = [e for e in evs if e.slot == slot]
+                before = [e for e in mine if e.t <= mk]
+                if not before or not before[-1].kind.startswith("dead"):
+                    continue  # 表示の時点で倒れていない
+                if not SELF_WINDOW[0] <= mk - before[-1].t <= SELF_WINDOW[1]:
+                    continue
+                if final and not any(e.kind == "respawn" and 0 <= e.t - mk <= RESPAWN_AFTER for e in mine):
+                    continue
+                cands.append(slot)
+            for c in cands:
+                votes[c] = votes.get(c, 0) + 1 / len(cands)
+        if votes:
+            self.match.me_slot = max(votes, key=votes.get)
 
     def _end(self, t):
         self.match.end = t
+        self._decide_self(final=True)
         self.finished, self.match = self.match, None
         self.cur = None
-        self.special_since = None
+        self.ready_at = [None] * 8
 
     def _close_finished(self):
         m, self.finished = self.finished, None
@@ -167,10 +217,11 @@ class Tracker:
             self.pend, self.pend_n = None, 0
             return
         self.cur, self.pend, self.pend_n = new, None, 0
-        if new[0] == SPECIAL and old[0] != SPECIAL:
-            self.special_since = t
-        elif new[0] != SPECIAL:
-            self.special_since = None
+        for k in range(8):
+            if new[k] == SPECIAL and old[k] != SPECIAL:
+                self.ready_at[k] = t
+            elif new[k] != SPECIAL:
+                self.ready_at[k] = None
         if t - self.match.start < IGNORE_FIRST:
             return
         alive = (sum(x != DEAD for x in new[:4]), sum(x != DEAD for x in new[4:]))

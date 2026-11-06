@@ -1,4 +1,4 @@
-"""貯まった試合の記録から、自分（左1）について「どんな状況で何が起きやすいか」を集計する。
+"""貯まった試合の記録から、自分について「どんな状況で何が起きやすいか」を集計する。
 
   python -m splat_compass.analyze
 """
@@ -24,11 +24,11 @@ def _replay(m):
             st[slot] = 2
 
 
-def _situation(st):
+def _situation(st, me):
     ally = sum(st[s] > 0 for s in SLOTS[:4])
     enemy = sum(st[s] > 0 for s in SLOTS[4:])
     diff = "有利" if ally > enemy else ("不利" if ally < enemy else "同数")
-    return st["左1"] > 0, diff, min(sum(st[s] == 2 for s in SLOTS[4:]), 2)
+    return st[me] > 0, diff, min(sum(st[s] == 2 for s in SLOTS[4:]), 2)
 
 
 def situations(matches):
@@ -36,20 +36,23 @@ def situations(matches):
     sp_use = defaultdict(lambda: [0, 0, 0])
     held = total = 0
     for m in matches:
+        me = m.get("me_slot")
+        if not me:
+            continue  # 自分の枠が分からない試合は、自分についての集計に使わない
         last = m["video_start"]
         evs = list(_replay(m))
         for i, (t, slot, what, st) in enumerate(evs):
-            me_alive, diff, esp = _situation(st)
+            me_alive, diff, esp = _situation(st, me)
             if me_alive:
                 alive_t[("人数", diff)] += t - last
                 alive_t[("敵", esp)] += t - last
             last = t
-            if slot == "左1" and "倒された" in what:
+            if slot == me and "倒された" in what:
                 total += 1
                 held += "持ったまま" in what
                 deaths[("人数", diff)] += 1
                 deaths[("敵", esp)] += 1
-            if slot == "左1" and what == "スペシャル発動":
+            if slot == me and what == "スペシャル発動":
                 rec = sp_use[diff]
                 rec[0] += 1
                 for t2, s2, w2, _ in evs[i + 1:]:
@@ -57,13 +60,14 @@ def situations(matches):
                         break
                     if s2.startswith("右") and "倒された" in w2:
                         rec[1] += 1
-                    if s2 == "左1" and "倒された" in w2:
+                    if s2 == me and "倒された" in w2:
                         rec[2] += 1
                         break
     return alive_t, deaths, sp_use, held, total
 
 
 def features(m):
+    me = m.get("me_slot")
     f = defaultdict(float)
     last = m["video_start"]
     for t, slot, what, st in _replay(m):
@@ -74,15 +78,16 @@ def features(m):
         last = t
         if "倒された" in what:
             f["味方のデス" if slot[0] == "左" else "敵のデス"] += 1
-            if slot == "左1":
+            if slot == me:
                 f["自分のデス"] += 1
                 f["自分がスペシャルを持ったまま倒された"] += "持ったまま" in what
         elif what == "スペシャル発動":
-            f["自分のスペシャル発動" if slot == "左1" else ("味方のスペシャル発動" if slot[0] == "左" else "敵のスペシャル発動")] += 1
+            f["自分のスペシャル発動" if slot == me else ("味方のスペシャル発動" if slot[0] == "左" else "敵のスペシャル発動")] += 1
     mins = (m["video_end"] - m["video_start"]) / 60
-    out = {k + "（1分あたり）": f[k] / mins for k in
-           ["自分のデス", "自分のスペシャル発動", "自分がスペシャルを持ったまま倒された",
-            "味方のデス", "敵のデス", "味方のスペシャル発動", "敵のスペシャル発動"]}
+    keys = ["味方のデス", "敵のデス", "味方のスペシャル発動", "敵のスペシャル発動"]
+    if me:
+        keys = ["自分のデス", "自分のスペシャル発動", "自分がスペシャルを持ったまま倒された"] + keys
+    out = {k + "（1分あたり）": f[k] / mins for k in keys}
     out["人数不利の割合"] = f["不利"] / (mins * 60)
     out["人数有利の割合"] = f["有利"] / (mins * 60)
     return out
@@ -91,7 +96,10 @@ def features(m):
 def report(matches):
     mins = sum(m["video_end"] - m["video_start"] for m in matches) / 60
     alive_t, deaths, sp_use, held, total = situations(matches)
-    print(f"{len(matches)}試合 / {mins:.0f}分 / 自分のデス {total}回（1分あたり {total / max(mins, 1e-9):.2f}回）")
+    with_me = [m for m in matches if m.get("me_slot")]
+    me_mins = sum(m["video_end"] - m["video_start"] for m in with_me) / 60
+    print(f"{len(matches)}試合 / {mins:.0f}分（うち自分の枠が分かった試合 {len(with_me)}）")
+    print(f"自分のデス {total}回（1分あたり {total / max(me_mins, 1e-9):.2f}回）")
     print("\n■ 状況ごとの自分のデスのしやすさ（生きていた1分あたり）")
     keys = [(("人数", d), f"人数{d}") for d in ("有利", "同数", "不利")] + \
            [(("敵", k), f"敵のスペシャル準備 {k}{'人以上' if k == 2 else '人'}") for k in (0, 1, 2)]
@@ -124,6 +132,8 @@ def report(matches):
         return
     print(f"  {'':<30}{'勝ち':>6}{'負け':>8}")
     for k in agg["勝ち"]:
+        if not agg["負け"].get(k):
+            continue
         a = sum(agg["勝ち"][k]) / len(agg["勝ち"][k])
         b = sum(agg["負け"][k]) / len(agg["負け"][k])
         fa, fb = (f"{a * 100:.0f}%", f"{b * 100:.0f}%") if "割合" in k else (f"{a:.2f}", f"{b:.2f}")
