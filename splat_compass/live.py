@@ -165,11 +165,14 @@ def main():
     ap.add_argument("--data", help="記録の保存先")
     a = ap.parse_args()
     if a.list:
-        cams = list_cameras()
+        snap = os.path.abspath("camera_check")
+        cams = list_cameras(snapshot_dir=snap)
         if not cams:
             print("カメラが見つかりませんでした")
         for i, w, h in cams:
             print(f"カメラ {i}: {w}x{h}" + ("" if (w, h) == (1920, 1080) else "  ← 1920x1080 ではありません"))
+        if cams:
+            print(f"各カメラの映像を {snap} に画像で保存しました。スプラの画面が写っている番号を使ってください。")
         return
     if a.video:
         frames, source = video_frames(a.video, FPS, realtime=not a.fast), os.path.basename(a.video)

@@ -3,9 +3,28 @@
 import threading
 import time
 
+import os
+
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")  # 使えない番号を試したときの警告を出さない
 import cv2
 
 from .hud import H, W
+
+
+def _open_camera(index):
+    """Windows では DirectShow → Media Foundation → 自動の順に試す。"""
+    for name in ("CAP_DSHOW", "CAP_MSMF", "CAP_ANY"):
+        if not hasattr(cv2, name):
+            continue
+        cap = cv2.VideoCapture(index, getattr(cv2, name))
+        if cap.isOpened():
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
+            ok, _ = cap.read()
+            if ok:
+                return cap
+        cap.release()
+    return None
 
 
 def _fit(frame):
@@ -68,11 +87,8 @@ class _Latest(threading.Thread):
 
 def camera_frames(index=0, fps=5):
     """キャプボや OBS 仮想カメラを番号で開いて読む。"""
-    backend = cv2.CAP_DSHOW if hasattr(cv2, "CAP_DSHOW") else cv2.CAP_ANY
-    cap = cv2.VideoCapture(index, backend)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-    if not cap.isOpened():
+    cap = _open_camera(index)
+    if cap is None:
         raise RuntimeError(f"カメラ {index} を開けませんでした")
     reader = _Latest(cap)
     reader.start()
@@ -91,17 +107,18 @@ def camera_frames(index=0, fps=5):
     cap.release()
 
 
-def list_cameras(max_index=6):
-    """使えそうなカメラ番号と解像度を調べる。"""
+def list_cameras(max_index=6, snapshot_dir=None):
+    """使えそうなカメラ番号と解像度を調べる。snapshot_dir を渡すと、各カメラの1コマを画像で保存する。"""
     found = []
-    backend = cv2.CAP_DSHOW if hasattr(cv2, "CAP_DSHOW") else cv2.CAP_ANY
     for i in range(max_index):
-        cap = cv2.VideoCapture(i, backend)
-        if cap.isOpened():
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-            ok, f = cap.read()
-            if ok:
-                found.append((i, f.shape[1], f.shape[0]))
+        cap = _open_camera(i)
+        if cap is None:
+            continue
+        ok, f = cap.read()
+        if ok:
+            found.append((i, f.shape[1], f.shape[0]))
+            if snapshot_dir:
+                os.makedirs(snapshot_dir, exist_ok=True)
+                cv2.imwrite(os.path.join(snapshot_dir, f"camera_{i}.png"), f)
         cap.release()
     return found
