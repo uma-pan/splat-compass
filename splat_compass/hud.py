@@ -55,6 +55,18 @@ def me_respawning(img):
     return bool(((p[..., 0] > 200) & (p[..., 1] > 200) & (p[..., 2] < 90)).mean() > 0.1)
 
 
+GAUGE_CENTER = (1780, 115)  # 右上のスペシャルゲージの中心
+_yy, _xx = np.mgrid[-95:96, -95:96]
+_RING = (np.hypot(_yy, _xx) > 60) & (np.hypot(_yy, _xx) < 90)
+
+
+def me_special_full(img):
+    """自分のスペシャルゲージが満タンか。満タンになると目盛りが白っぽく光る。"""
+    cx, cy = GAUGE_CENTER
+    v, s = _mx_sat(img[cy - 95:cy + 96, cx - 95:cx + 96])
+    return bool(((v > 200) & (s < 90))[_RING].mean() > 0.12)
+
+
 def _crop(img, box):
     x, y, w, h = box
     return img[y:y + h, x:x + w]

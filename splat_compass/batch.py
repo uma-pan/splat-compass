@@ -2,6 +2,7 @@
 
   python -m splat_compass.batch "D:\\Spla Capture"            … 未処理の録画を全部処理
   python -m splat_compass.batch "D:\\Spla Capture" --watch    … 新しい録画ができるたびに処理し続ける
+  python -m splat_compass.batch "D:\\Spla Capture" --redo     … 新しい版で全部読み直す
 """
 import argparse
 import datetime as dt
@@ -50,7 +51,10 @@ def is_stable(path, wait=5):
     return a == os.path.getsize(path)
 
 
-def run(folder, store, watch=False):
+def run(folder, store, watch=False, redo=False):
+    if redo:
+        n = store.reset_videos()
+        print(f"録画から作った記録 {n}件を matches/_old に移しました。全部読み直します。")
     while True:
         done = store.processed()
         todo = [p for p in sorted(glob.glob(os.path.join(folder, "*.mp4"))) if os.path.basename(p) not in done]
@@ -72,8 +76,9 @@ def main():
     ap.add_argument("folder")
     ap.add_argument("--watch", action="store_true", help="新しい録画を待ち続ける")
     ap.add_argument("--data", help="記録の保存先（既定: ホームの splat-compass-data）")
+    ap.add_argument("--redo", action="store_true", help="処理済みの録画も全部読み直す（前の記録は matches/_old に移す）")
     a = ap.parse_args()
-    run(a.folder, Store(a.data), a.watch)
+    run(a.folder, Store(a.data), a.watch, a.redo)
 
 
 if __name__ == "__main__":

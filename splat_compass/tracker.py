@@ -4,14 +4,17 @@
 """
 from dataclasses import dataclass, field
 
-from .hud import DEAD, SLOT_NAMES, SPECIAL, ScreenReader, me_respawning, read_slots
+from .hud import DEAD, SLOT_NAMES, SPECIAL, ScreenReader, me_respawning, me_special_full, read_slots
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
+GAUGE_MIN = 10            # ゲージが満タンのコマがこれだけ貯まったら、ゲージで自分の枠を決める
+GAUGE_MARGIN = 30         # 一番ゲージと合う枠が、二番目よりこれだけ多く合っていること
 RESPAWN_AFTER = 8.0        # 復活待ち表示が出てから何秒以内に復活するか
+FAKE_MATCH = 60.0    # これより短い区間は試合ではないとみなす（秒）
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
 MASS_DEATH = 5       # 同時にこの人数以上が倒れたら、画面の切り替わりとみなす
@@ -49,7 +52,10 @@ class Match:
     end: float = None
     rule: str = None
     result: str = None
-    me_slot: str = None  # 自分の枠（自分が倒されたときの復活待ち表示から推定）
+    me_slot: str = None  # 自分の枠（スペシャルゲージと復活待ち表示から推定）
+    gauge_votes: list = field(default_factory=lambda: [0, 0, 0, 0])  # 味方4枠それぞれの、ゲージとの一致度
+    gauge_full_frames: int = 0
+    me_by_gauge: bool = False
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
     events: list = field(default_factory=list)
@@ -68,6 +74,7 @@ class Tracker:
         self.on_n, self.off_since = 0, None
         self.last_rule = (None, -1e9)   # (ルール名, 見た時刻)
         self.ready_at = [None] * 8  # 各枠のスペシャルが溜まった時刻
+        self.res_n = 0
         self.resp_prev = False
         self.last_t = 0.0
 
@@ -101,12 +108,30 @@ class Tracker:
     # ---- 1コマごと ----
     def feed(self, t, img):
         self.last_t = t
+        if self.finished is not None and t - self.finished.end > RESULT_WAIT:
+            self._close_finished()
         slots = read_slots(img)
         known = sum(x is not None for x in slots)
         if self.match is None:
             self._idle(t, img, known)
             return
-        # 試合中
+        # 試合中。勝敗の表示は、上部の表示が消えるより先に出ることがあるので、ここでも見る
+        res, _ = self.screens.result(img)
+        self.res_n = self.res_n + 1 if res else 0
+        if self.res_n >= 2:  # 2コマ続けて見えたら確定（試合中の誤判定を避ける）
+            self.res_n = 0
+            if self.finished is not None and t - self.match.start < FAKE_MATCH:
+                # 試合後の画面を「試合開始」と読み違えていた。勝敗は直前の試合のもの
+                self.match = None
+                self.cur = None
+                self.finished.result = res
+                self._close_finished()
+            else:
+                self._end(t)
+                if self.finished is not None:
+                    self.finished.result = res
+                    self._close_finished()
+            return
         if known < 6:
             if self.off_since is None:
                 self.off_since = t
@@ -121,6 +146,8 @@ class Tracker:
             self._decide_self()
         self.resp_prev = resp
         self._update_slots(t, slots)
+        if self.cur is not None:
+            self._gauge_vote(me_special_full(img))
 
     def _idle(self, t, img, known):
         rule, _ = self.screens.rule(img)
@@ -131,8 +158,6 @@ class Tracker:
             if res:
                 self.finished.result = res
                 self._close_finished()
-            elif t - self.finished.end > RESULT_WAIT:
-                self._close_finished()
         if known >= 6:
             self.on_n += 1
             if self.on_n >= START_FRAMES:
@@ -141,8 +166,7 @@ class Tracker:
             self.on_n = 0
 
     def _start(self, t):
-        if self.finished is not None:
-            self._close_finished()
+        # 直前の試合は、勝敗の表示を待つためにしばらく閉じずにおく
         self.match = Match(start=t)
         if t - self.last_rule[1] < RULE_KEEP:
             self.match.rule = self.last_rule[0]
@@ -150,6 +174,22 @@ class Tracker:
         self.on_n, self.off_since = 0, None
         self.ready_at = [None] * 8
         self.resp_prev = False
+
+    def _gauge_vote(self, full):
+        """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""
+        v = self.match.gauge_votes
+        for k in range(4):
+            sp = self.cur[k] == SPECIAL
+            if full and sp:
+                v[k] += 1
+            elif full != sp:
+                v[k] -= 1
+        if full:
+            self.match.gauge_full_frames += 1
+        best = max(range(4), key=lambda k: v[k])
+        if self.match.gauge_full_frames >= GAUGE_MIN and v[best] - sorted(v)[-2] >= GAUGE_MARGIN:
+            self.match.me_slot = SLOT_NAMES[best]
+            self.match.me_by_gauge = True
 
     def _decide_self(self, final=False):
         """自分の復活待ち表示が出た時刻と、味方の倒された・復活の時刻を照らし合わせて自分の枠を決める。
@@ -174,10 +214,17 @@ class Tracker:
                 cands.append(slot)
             for c in cands:
                 votes[c] = votes.get(c, 0) + 1 / len(cands)
-        if votes:
+        if votes and not self.match.me_by_gauge:  # ゲージで決まっていればそちらを優先
             self.match.me_slot = max(votes, key=votes.get)
 
     def _end(self, t):
+        if t - self.match.start < FAKE_MATCH:
+            # 試合後の画面などを試合と読み違えた短い区間。捨てて、直前の試合の勝敗待ちを続ける
+            self.match, self.cur = None, None
+            self.ready_at = [None] * 8
+            return
+        if self.finished is not None:
+            self._close_finished()
         self.match.end = t
         self._decide_self(final=True)
         self.finished, self.match = self.match, None
