@@ -67,6 +67,53 @@ def me_special_full(img):
     return bool(((v > 200) & (s < 90))[_RING].mean() > 0.12)
 
 
+# カウント（のこり〇〇）の箱。上部アイコンの下、残り時間の左右にある
+COUNT_Y = (152, 208)                      # 数字の行
+COUNT_BOXES = [(793, 905), (1015, 1128)]  # 左（味方）・右（敵）の x 範囲
+_DIGITS = None
+
+
+def _digit_protos():
+    global _DIGITS
+    if _DIGITS is None:
+        d = np.load(os.path.join(TEMPLATE_DIR, "digits.npz"))
+        _DIGITS = {k[1:]: d[k] for k in d.files}  # "0"〜"9" と "x"（数字でないもの）
+    return _DIGITS
+
+
+def _read_box(b):
+    """箱の切り抜きから (数, 箱が色で塗られているか)。読めなければ (None, None)。"""
+    b = b.astype(np.int16)
+    bg = np.median(b.reshape(-1, 3), axis=0)
+    filled = bool(bg.max() - bg.min() > 80 and bg.max() > 100)
+    fg = ((np.abs(b - bg).max(axis=2) > 70) & (b.max(axis=2) > 150)).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(fg)
+    protos = _digit_protos()
+    chars = []
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if h >= 28 and a >= 60 and w <= 45 and x > 0 and x + w < fg.shape[1] and y > 0:
+            g = cv2.resize((lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255, (20, 30),
+                           interpolation=cv2.INTER_AREA).flatten().astype(np.float32) / 255
+            d = min(protos, key=lambda k: float(((protos[k] - g) ** 2).sum()))
+            if d != "x":
+                chars.append((x, d))
+    if not chars or len(chars) > 3:
+        return None, None
+    v = int("".join(c for _, c in sorted(chars)))
+    return (v, filled) if v <= 100 else (None, None)
+
+
+def read_counts(img):
+    """(味方のカウント, 敵のカウント, 味方の箱が塗られているか, 敵の箱が塗られているか)。
+    カウントが出ていない画面やルールでは None。ガチエリアでは、箱が塗られている側がエリアを確保している。"""
+    y0, y1 = COUNT_Y
+    (l, lf), (r, rf) = (_read_box(img[y0:y1, x0:x1]) for x0, x1 in COUNT_BOXES)
+    if l is None or r is None:
+        return None
+    return l, r, lf, rf
+
+
 def _crop(img, box):
     x, y, w, h = box
     return img[y:y + h, x:x + w]

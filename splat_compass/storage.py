@@ -38,6 +38,8 @@ class Store:
             "me_slot": m.me_slot,
             "columns": ROW_HEADER,
             "events": [e.row() for e in m.events],
+            "timeline_columns": ["時刻", "味方カウント", "敵カウント", "味方の箱が塗られている", "敵の箱が塗られている"],
+            "timeline": m.timeline,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
