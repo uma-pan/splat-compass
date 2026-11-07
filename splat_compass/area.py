@@ -105,6 +105,48 @@ def _describe(ep, m):
     ep.setdefault("ally_specials_at_start", 0)
 
 
+EARLY = 10.0  # 確保されてから最初の何秒を見るか
+
+
+def early(ep, m, w=EARLY):
+    """確保されてから最初の w 秒に起きたことを数える。
+    打開が長引くほど出来事が増えて見える偏りを避けるため、w 秒より長く続いた打開だけで使う。"""
+    me = m.get("me_slot")
+    st = {s: 1 for s in SLOTS}
+    f = {"ally_deaths": 0, "enemy_deaths": 0, "me_died": False, "first_special_at": None,
+         "alive_at_first_special": None, "specials": []}
+    for t, rel, slot, what, *_ in m["events"]:
+        inside = ep["start"] <= t <= ep["start"] + w
+        if inside and "倒された" in what:
+            f["ally_deaths" if slot[0] == "左" else "enemy_deaths"] += 1
+            f["me_died"] |= slot == me
+        if inside and what == "スペシャル発動" and slot[0] == "左":
+            if f["first_special_at"] is None:
+                f["first_special_at"] = t - ep["start"]
+                f["alive_at_first_special"] = sum(st[s] > 0 for s in SLOTS[:4])
+            f["specials"].append(t)
+        if "倒された" in what:
+            st[slot] = 0
+        elif what in ("復活", "スペシャル発動"):
+            st[slot] = 1
+        elif what == "スペシャル溜まった":
+            st[slot] = 2
+    sp = f.pop("specials")
+    f["synced"] = any(b - a <= SPECIAL_SYNC for a, b in zip(sp, sp[1:]))
+    f["n_specials"] = len(sp)
+    return f
+
+
+def _row_after(label, items, w=EARLY):
+    """items: [(打開, 最初の w 秒の様子)]。w 秒以降、打開できるまでの残り時間と、その後に取られたカウントを比べる。"""
+    if not items:
+        return f"  {label:<30}   0回"
+    ok = [e for e, _ in items if e["success"]]
+    rest = [e["seconds"] - w for e in ok]
+    return (f"  {label:<30}{len(items):4d}回  成功{len(ok) / len(items) * 100:4.0f}%"
+            f"  そこから打開まで平均{_avg(rest):5.1f}秒")
+
+
 def _avg(xs):
     return sum(xs) / len(xs) if xs else float("nan")
 
@@ -142,6 +184,22 @@ def report(matches):
     print(_row("味方が2人以上スペシャルを合わせた", [e for e in all_eps if e["specials_synced"]]))
     print(_row("合わせなかった（使ったが単発）", [e for e in all_eps if e["ally_specials_used"] and not e["specials_synced"]]))
     print(_row("誰もスペシャルを使わなかった", [e for e in all_eps if not e["ally_specials_used"]]))
+    long_ = [(e, early(e, m)) for m, eps in per_match for e in eps if e["seconds"] > EARLY]
+    if long_:
+        print(f"\n■ 確保されてから最初の{int(EARLY)}秒に何をしたか（{int(EARLY)}秒以内に終わらなかった打開 {len(long_)}回）")
+        print(_row_after("味方が1人も落ちなかった", [x for x in long_ if x[1]["ally_deaths"] == 0]))
+        print(_row_after("味方が1人落ちた", [x for x in long_ if x[1]["ally_deaths"] == 1]))
+        print(_row_after("味方が2人以上落ちた", [x for x in long_ if x[1]["ally_deaths"] >= 2]))
+        print(_row_after("敵を1人以上倒した", [x for x in long_ if x[1]["enemy_deaths"] >= 1]))
+        print(_row_after("敵を1人も倒せなかった", [x for x in long_ if x[1]["enemy_deaths"] == 0]))
+        print(_row_after("スペシャルを使わなかった", [x for x in long_ if x[1]["n_specials"] == 0]))
+        print(_row_after("味方3人以上いるときに最初のスペシャル", [x for x in long_ if (x[1]["alive_at_first_special"] or 0) >= 3]))
+        print(_row_after("味方2人以下のときに最初のスペシャル", [x for x in long_ if x[1]["alive_at_first_special"] is not None and x[1]["alive_at_first_special"] <= 2]))
+        print(_row_after("2人以上でスペシャルを合わせた", [x for x in long_ if x[1]["synced"]]))
+        print(_row_after("スペシャルは単発だった", [x for x in long_ if x[1]["n_specials"] >= 1 and not x[1]["synced"]]))
+        mine = [x for x, (m) in [((e, early(e, m)), m) for m, eps in per_match for e in eps if e["seconds"] > EARLY] if m.get("me_slot")]
+        print(_row_after("自分は落ちなかった", [x for x in mine if not x[1]["me_died"]]))
+        print(_row_after("自分が落ちた", [x for x in mine if x[1]["me_died"]]))
     with_me = [e for e, m in ((e, m) for m, eps in per_match for e in eps) if m.get("me_slot")]
     if with_me:
         print("\n■ 自分")
