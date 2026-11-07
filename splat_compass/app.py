@@ -400,8 +400,9 @@ def make_handler(store, get_video_dir, st, cmds):
     def page():
         with st.lock:
             info_p = os.path.join(store.root, "weapon_info.json")
-            v = (st.version, weapons.labels_mtime(store),  # 試合が増えたか、ブキの名前・情報が直されたら作り直す
-                 os.path.getmtime(info_p) if os.path.exists(info_p) else 0)
+            from . import statink
+            v = (st.version, weapons.labels_mtime(store),  # 試合が増えたか、ブキの名前・情報や stat.ink の集計が変わったら作り直す
+                 os.path.getmtime(info_p) if os.path.exists(info_p) else 0, statink.summary_mtime(store))
         if cache["version"] != v:
             cache["html"] = report.render(store, get_video_dir(), link=link,
                                           first_tabs=[("live", "試合中", LIVE_HTML), ("wcheck", "ブキの確認", review_html(store, link))],

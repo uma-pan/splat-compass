@@ -261,6 +261,64 @@ def section_killers(store, ms):
     return '<div class="grid2">' + body + "</div>"
 
 
+def section_statink(store, ms, st):
+    """stat.ink（世界のプレイヤーの試合）と比べる。"""
+    from . import statink
+    sm = statink.load_summary(store)
+    if not sm:
+        return card("世界のプレイヤーと比べる（stat.ink）",
+                    '<p class="muted">stat.ink の公開データを取り込むと、ブキごとの世界での勝率や、編成だけで見た勝率と比べられます。'
+                    '<code>statink.bat</code>（<code>python -m splat_compass.statink</code>）で取り込めます。</p>', wide=True)
+    # 全ルールまとめたブキの勝率（上げた本人を除く）
+    allwr = defaultdict(lambda: [0, 0])
+    for md in sm["modes"].values():
+        for n, (c, w) in md["wr"].items():
+            allwr[n][0] += c
+            allwr[n][1] += w
+    rows = []
+    for n, (c, w) in sorted(st["enemy"].items(), key=lambda x: -x[1][0]):
+        if c < 3:
+            continue
+        g = allwr.get(norm_name(n))
+        rows.append([ESC(n), f"{pct(1 - w / c)}（{c}試合）", pct(g[1] / g[0]) if g and g[0] >= 50 else "—"])
+    out = card("相手にいたブキ: 自分が負けた割合と、世界でのそのブキの勝率",
+               table(["ブキ", "相手にいた時に自分が負けた割合", "世界でのそのブキの勝率"], rows[:20])
+               + '<p class="muted">世界の勝率が50%より高いのに、自分が負けた割合がもっと高いブキは、自分が特に苦手な相手かもしれません。</p>')
+    # 編成だけで見た勝率が、自分の試合の勝ち負けを言い当てるか
+    comp = []
+    namer = weapons.Namer(store)
+    for m in ms:
+        if m.get("result") not in ("勝ち", "負け") or not m.get("me_slot") or not m.get("rule"):
+            continue
+        names = weapons.weapons_of(store, m, namer)
+        if not names or any(x is None for x in names):
+            continue
+        me = analyze.SLOTS.index(m["me_slot"])
+        ally = names[:4] if me < 4 else names[4:]
+        enemy = names[4:] if me < 4 else names[:4]
+        p = statink.comp_prior(sm, m["rule"], ally, enemy)
+        if p is not None:
+            comp.append((p, m["result"] == "勝ち"))
+    if len(comp) >= 20:
+        comp.sort()
+        k = len(comp) // 3
+        parts = [("編成が不利な試合", comp[:k]), ("中くらい", comp[k:2 * k]), ("編成が有利な試合", comp[2 * k:])]
+        trs = [[lb, f"{np.mean([p for p, _ in g]) * 100:.0f}%", pct(np.mean([w for _, w in g])), str(len(g))] for lb, g in parts]
+        out += card("編成だけで見た勝率（stat.ink のブキの強さから）と、実際の勝率",
+                    table(["", "編成だけで見た勝率（平均）", "実際に勝った割合", "試合"], trs)
+                    + '<p class="muted">上から下へ実際の勝率が上がっていれば、編成の有利さが自分の試合でも効いているということです。</p>')
+    out += card("取り込んだ stat.ink のデータ",
+                f'<p class="muted">{sm["battles"]:,}試合（{len(sm["files"])}日分、{ESC(sm.get("made_at", ""))} に集計）。'
+                'Xマッチとバンカラマッチのガチルールだけを使い、ブキごとの数字からは試合を上げた本人を除いています。'
+                '上げているのはやり込んでいる人が多いので、腕前は平均より高めです。データ: <a href="https://stat.ink/" target="_blank">stat.ink</a></p>', wide=True)
+    return out
+
+
+def norm_name(n):
+    from .weapon_info import norm
+    return norm(n)
+
+
 def section_weapons(store, ms):
     st, rate = weapons.stats(store, ms)
     if rate is None:
@@ -300,6 +358,7 @@ def section_weapons(store, ms):
         else:
             items = [(f"{k}（{c}試合）", w / c) for k, c, w in sorted(rs, key=lambda x: x[2] / x[1]) if c >= 5]
         body += card(title, bars(items[:15], pct, "#7b61c9", 1.0) if items else '<p class="muted">まだ試合が足りません</p>')
+    body += section_statink(store, ms, st)
     body += card("ブキの情報について", '<p class="muted">射程の長い・短いは、メインのブキごとのおおまかな目安です。'
                  'サブ・スペシャルは攻略サイトの一覧から入れたもので、新しい亜種などは空のことがあります。'
                  '「ブキの確認」タブの下の表で直せます。</p>', wide=True)

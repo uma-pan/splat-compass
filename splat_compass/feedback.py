@@ -16,6 +16,7 @@ from . import area, killcam
 from .storage import Store
 
 QUICK_DEATH = 8.0
+SLOTS = ["左1", "左2", "左3", "左4", "右1", "右2", "右3", "右4"]
 
 
 def _mmss(sec):
@@ -57,6 +58,25 @@ def _numbers(m):
                 if f["alive_at_first_special"] is not None and f["alive_at_first_special"] <= 2:
                     n["early_sp_few"].append(e["start"] - m["video_start"] + f["first_special_at"])
     return n
+
+
+def _world_kills(store, m, mins):
+    """stat.ink の同じブキの人の、この試合の長さあたりの平均キル数。(ブキの名前, 平均) か None"""
+    try:
+        from . import statink, weapons
+        from .weapon_info import norm
+        sm = statink.load_summary(store)
+        names = weapons.weapons_of(store, m) if sm else None
+        if not names:
+            return None
+        k = SLOTS.index(m["me_slot"])
+        mine = names[k]
+        e = sm["kd"].get(norm(mine)) if mine else None
+        if not e or e[0] < 100 or not e[4]:
+            return None
+        return mine, e[1] / e[4] * 60 * mins
+    except Exception:
+        return None
 
 
 def baseline(history):
@@ -104,6 +124,14 @@ def match_feedback(m, base, store=None):
     s_got, s_exp = len(n["specials"]), base["specials"] * mins
     if s_exp >= 2 and s_got >= s_exp * 1.4 + 1:
         out.append(("良い", f"スペシャルをよく使えた {s_got}回（普段なら {s_exp:.1f}回くらい）"))
+    world = _world_kills(store, m, mins) if store is not None and n["kills"] is not None else None
+    if world:
+        name, exp = world
+        got = len(n["kills"])
+        if got >= exp * 1.4 + 1:
+            out.append(("良い", f"世界の{name}使いの平均（{exp:.1f}人）より多く倒せた {got}人"))
+        elif exp >= 3 and got <= exp * 0.5:
+            out.append(("気になる", f"倒した数が、世界の{name}使いの平均（{exp:.1f}人）の半分以下 {got}人"))
     if n["kills"] is not None and base.get("kills"):
         k_got, k_exp = len(n["kills"]), base["kills"] * mins
         if k_got >= k_exp * 1.4 + 1:
