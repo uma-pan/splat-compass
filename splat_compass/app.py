@@ -125,7 +125,7 @@ APP_CSS = """<style>
 .wcell .saved { color:#1a7f37; font-size:11px; height:14px; }
 .wmatch { background:#fff; border-radius:10px; padding:8px 12px; margin:8px 0; }
 .wmatch h2 { font-size:13px; margin:0 0 4px; }
-body.compact .lv-weapons { display:none; }
+.lv-weapons { margin-bottom:12px; } body.compact .lv-weapons { display:none; }
 .logs { list-style:none; margin:0; padding:0; font-size:13px; max-height:260px; overflow:auto; }
 .logs li { padding:3px 0; border-top:1px solid #eee; }
 body.compact header, body.compact nav { display:none; }
