@@ -90,7 +90,7 @@ def predict_match(store, m, area_model=None):
     if m.get("rule") == "ガチエリア":
         model = area_model or winprob.load_model(store)
         return (tt, model.predict(X)) if model is not None else None
-    if m.get("rule") in winprob.SIMPLE_RULES:
+    if m.get("rule") in winprob.SIMPLE_RULES or m.get("rule") is None:
         simple = winprob.load_simple(store)
         return (tt, simple.predict(X[:, winprob.SIMPLE_COLS])) if simple is not None else None
     return None
