@@ -6,7 +6,7 @@
   python -m splat_compass.statink --days 120
   python -m splat_compass.statink --no-download  … ダウンロードせずに集計だけやり直す
 
-データ: stat.ink（https://stat.ink/downloads）。使うときは出典として stat.ink を書くこと。
+データ: stat.ink（https://stat.ink/downloads）。CC BY 4.0（ファイルの一覧のページの表記）なので、使うときは出典として stat.ink を書くこと。
 注意:
 - 上げているのはやり込んでいる人が多く、腕前は平均より高めに偏る。
 - 各試合の A1 は上げた本人。ブキの数や勝率が偏るので、ブキごとの集計からは除く（stat.ink の説明より）。
@@ -69,31 +69,38 @@ def _subdirs(html, page_url):
     out = set()
     for href in re.findall(r'href="([^"?]+/)"', html):
         url = urllib.parse.urljoin(page_url, href)
-        if url.startswith(page_url) and url != page_url and re.search(r"/\d{4}(-\d{2})?/$", url):
+        if url.startswith(page_url) and url != page_url and re.search(r"/\d{4}/(\d{2}/)?$", url):
             out.add(url)
     return sorted(out, reverse=True)
 
 
-def list_files(log=print):
-    """ファイルの一覧を読み、日ごとの CSV を集める。年ごと（月ごと）のフォルダに分かれていればたどる。"""
+def list_files(days=30, log=print):
+    """ファイルの一覧を読み、日ごとの CSV を集める。年 → 月 のフォルダに分かれているので、新しい方からたどる。"""
     html = _get(LISTING).decode("utf-8", "replace")
     pages = [(LISTING, html)]
     links = dict(find_csv_links(html, LISTING))
+    months_needed = days // 28 + 2
+    months = 0
     for sub in _subdirs(html, LISTING)[:2]:  # 新しい年から2つまで
+        if months >= months_needed:
+            break
         h2 = _get(sub).decode("utf-8", "replace")
         pages.append((sub, h2))
         links.update(find_csv_links(h2, sub))
-        for sub2 in _subdirs(h2, sub)[:3]:
+        for sub2 in _subdirs(h2, sub):
+            if months >= months_needed:
+                break
             h3 = _get(sub2).decode("utf-8", "replace")
             pages.append((sub2, h3))
             links.update(find_csv_links(h3, sub2))
+            months += 1
     return sorted(links.items(), reverse=True), pages
 
 
 def download(store, days=30, log=print):
     d = _dir(store)
     log("stat.ink のファイルの一覧を読んでいます…")
-    links, pages = list_files(log)
+    links, pages = list_files(days, log)
     with open(os.path.join(d, "listing.html"), "w", encoding="utf-8") as f:
         f.write("\n".join(f"<!-- {u} -->\n{h}" for u, h in pages))  # 形が変わったときに確かめられるよう残しておく
     if not links:
