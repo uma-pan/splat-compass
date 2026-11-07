@@ -49,6 +49,18 @@ def read_slots(img):
     return out
 
 
+TIMER_BOX = (895, 45, 130, 55)  # 画面上部中央の残り時間（黒い地に白い数字）
+
+
+def hud_visible(img):
+    """試合中の上部の表示（残り時間）が出ているか。試合開始の演出中は出ていない。"""
+    x, y, w, h = TIMER_BOX
+    b = img[y:y + h, x:x + w]
+    dark = (b.max(axis=2) < 70).mean()
+    white = (b.min(axis=2) > 200).mean()
+    return bool(dark > 0.5 and 0.08 < white < 0.35)
+
+
 def crop_icon(img, k):
     """k番目の枠のアイコン（84x80）。ブキの絵が入っている。"""
     x = SLOT_X[k]

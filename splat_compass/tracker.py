@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, read_bubble_counts, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -17,7 +17,8 @@ QUIET_SEC = 1.5      # 「溜まってすぐ使った」とみなすには、前
 MIN_DEAD = 2.5       # 倒されてからこれより早く復活したら、表示の読み違いとみなして取り消す
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
-ICON_FROM, ICON_TO = 15.0, 60.0  # ブキのアイコンを切り出す時間帯（試合開始からの秒）
+ICON_FROM, ICON_TO = 3.0, 60.0  # ブキのアイコンを切り出し始める秒と、遅くともここまでに決める秒（試合開始から）
+ICON_SHOTS = 5  # 1人あたり何枚切り出して選ぶか
 BUBBLE_DROP = 6.0  # ヤグラ・ホコのカウントが1秒に減りうる上限（これより急に減ったら読み違いとみなす。ホコを持って泳ぐと速い）
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
@@ -192,12 +193,26 @@ class Tracker:
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), int(asari_goal_open(img))])
         self._update_slots(t, slots)
         rel = t - self.match.start
-        if ICON_FROM <= rel <= ICON_TO and any(i is None for i in self.match.icons):
-            for k in range(8):
-                if self.match.icons[k] is None and slots[k] == ALIVE:
-                    self.match.icons[k] = crop_icon(img, k)
+        if ICON_FROM <= rel and any(i is None for i in self.match.icons) and (rel > ICON_TO or hud_visible(img)):
+            self._collect_icons(t, rel, img, slots)
         if self.cur is not None:
             self._gauge_vote(me_special_full(img))
+
+    def _collect_icons(self, t, rel, img, slots):
+        """8人のアイコンを1秒おきに何枚か切り出し、ほかの切り出しと一番似ている1枚を選ぶ。
+        試合開始の演出の白い帯や、アサリ・ホコを持ったときの印が重なった1枚を避けるため。"""
+        from .weapons import feature
+        caps = self.icon_caps
+        for k in range(8):
+            if self.match.icons[k] is not None:
+                continue
+            c = caps[k]
+            if slots[k] == ALIVE and (not c or t - c[-1][0] >= 1.0):
+                ic = crop_icon(img, k)
+                c.append((t, ic, feature(ic)))
+            if len(c) >= ICON_SHOTS or (rel > ICON_TO and c):
+                score = [sum(float(f @ g) for _, _, g in c) for _, _, f in c]
+                self.match.icons[k] = c[max(range(len(c)), key=lambda i: score[i])][1]
 
     def _bubble_counts(self, t, img):
         """ガチヤグラ・ガチホコのカウントを吹き出しから読む。カウントは減るだけで、急には減らない。
@@ -249,6 +264,7 @@ class Tracker:
         self.resp_prev = False
         self.cp_bands = []
         self.map_prev = False
+        self.icon_caps = [[] for _ in range(8)]
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
     def _gauge_vote(self, full):

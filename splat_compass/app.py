@@ -20,7 +20,7 @@ import webbrowser
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import live, report
+from . import killcam, live, report, weapons
 from .sources import camera_frames, video_frames
 from .storage import Store
 
@@ -36,6 +36,7 @@ class State:
         self.lock = threading.Lock()
         self.state = {"in_match": False}
         self.wp, self.wp_kind = [], None
+        self.weapons, self.weapons_file = None, None  # この試合の8人のブキ、保存された試合の名前
         self.notices = deque(maxlen=20)
         self.logs = deque(maxlen=300)
         self.seq = 0
@@ -58,6 +59,11 @@ class State:
                     self.wp_kind = k
                 elif kind == "wp_reset":
                     self.wp, self.wp_kind = [], None
+                    self.weapons, self.weapons_file = None, None
+                elif kind == "weapons":
+                    self.weapons = msg
+                elif kind == "weapons_saved":
+                    self.weapons_file = msg
                 elif kind == "notice":
                     self._push(self.notices, msg)
                 elif kind == "log":
@@ -70,6 +76,7 @@ class State:
     def snapshot(self, since):
         with self.lock:
             return {"state": self.state, "wp": self.wp, "wp_kind": self.wp_kind, "reading": self.reading,
+                    "weapons": self.weapons, "weapons_file": self.weapons_file,
                     "version": self.version, "seq": self.seq,
                     "logs": [(i, t) for i, t, _ in self.logs if i > since],
                     "notices": [(i, t) for i, t, at in self.notices if i > since and time.time() - at < 6]}
@@ -87,6 +94,7 @@ LIVE_HTML = """
   <div class="card"><h3>試合</h3><div id="matchinfo" class="info">試合を待っています</div></div>
   <div class="card"><h3>8人</h3><div id="slots" class="slots"></div><div id="alive" class="info"></div></div>
 </div>
+<div class="card lv-weapons"><h3>8人のブキ</h3><div id="weapons" class="muted">試合が始まると読み取ります</div></div>
 <div class="card lv-log"><h3>記録</h3><ul id="logs" class="logs"></ul></div>
 """
 
@@ -106,6 +114,18 @@ APP_CSS = """<style>
 .slot.dead { background:#c8ccd2; color:#6b7280; } .slot.sp { box-shadow:0 0 0 3px #f1c40f; }
 .slot.me { outline:2px solid #111; outline-offset:2px; }
 .slot.gap { width:10px; background:none; }
+.wrow { display:flex; gap:6px; margin:4px 0; flex-wrap:wrap; align-items:flex-start; }
+.wrow .side { width:34px; font-size:12px; color:#6b7280; padding-top:28px; }
+.wcell { width:118px; font-size:12px; text-align:center; }
+.wcell img, .wcell .wimg { width:60px; height:63px; display:block; margin:0 auto 2px; border-radius:6px; }
+.wimg { background-repeat:no-repeat; background-size:480px 63px; }
+.wcell input { width:100%; font-size:12px; padding:2px 4px; border:1px solid #d1d5db; border-radius:4px; font-family:inherit; }
+.wcell input.guess { background:#fff7d6; } .wcell input.none { background:#fde2e1; }
+.wcell input.label { border-color:#3d7bd9; } .wcell.me input { font-weight:bold; }
+.wcell .saved { color:#1a7f37; font-size:11px; height:14px; }
+.wmatch { background:#fff; border-radius:10px; padding:8px 12px; margin:8px 0; }
+.wmatch h2 { font-size:13px; margin:0 0 4px; }
+body.compact .lv-weapons { display:none; }
 .logs { list-style:none; margin:0; padding:0; font-size:13px; max-height:260px; overflow:auto; }
 .logs li { padding:3px 0; border-top:1px solid #eee; }
 body.compact header, body.compact nav { display:none; }
@@ -197,10 +217,42 @@ function showState(d) {
   drawChart(d.wp);
 }
 
+let wsig = "";
+function weaponCell(w, k, file, me) {
+  const conf = w.conf || "none";
+  const val = w.name || "";
+  const ph = conf === "none" ? "分からない" : "";
+  const dis = file ? "" : 'disabled title="試合が保存されたら直せます"';
+  const key = file ? file + ":" + k : "";
+  return `<div class="wcell${k === me ? " me" : ""}"><img src="${w.img}"><input class="${conf}" list="wnames" value="${val.replace(/"/g, "&quot;")}" placeholder="${ph}" data-key="${key}" ${dis}><div class="saved"></div></div>`;
+}
+function showWeapons(d) {
+  const st = d.state || {};
+  const sig = JSON.stringify([d.weapons && d.weapons.map(w => [w.name, w.conf]), d.weapons_file, st.me]);
+  if (sig === wsig || (document.activeElement && document.activeElement.closest && document.activeElement.closest("#weapons"))) return;
+  wsig = sig;
+  if (!d.weapons) { $("weapons").innerHTML = '<span class="muted">試合が始まると読み取ります</span>'; return; }
+  const me = st.me === undefined ? null : st.me;
+  const row = (a, b, label) => `<div class="wrow"><span class="side">${label}</span>` +
+    d.weapons.slice(a, b).map((w, i) => weaponCell(w, a + i, d.weapons_file, me)).join("") + "</div>";
+  $("weapons").innerHTML = row(0, 4, "味方") + row(4, 8, "相手") +
+    `<div class="muted">${d.weapons_file ? "違っていたら名前を直してください（次から見本として使われます）" : "黄色は候補どまり、赤は分からないブキ。試合が保存されたら直せます"}</div>`;
+}
+document.addEventListener("change", async e => {
+  const el = e.target;
+  if (!el.dataset || !el.dataset.key) return;
+  const r = await fetch("/api/weapon", {method: "POST", headers: {"Content-Type": "application/json"},
+                                        body: JSON.stringify({key: el.dataset.key, name: el.value.trim()})});
+  const msg = el.parentElement.querySelector(".saved");
+  if (r.ok) { el.className = "label"; if (msg) msg.textContent = "保存しました"; }
+  else if (msg) msg.textContent = "保存できませんでした";
+});
+
 async function poll() {
   try {
     const d = await (await fetch("/api/live?since=" + since)).json();
     showState(d);
+    showWeapons(d);
     for (const [i, t] of d.logs) {
       const li = document.createElement("li"); li.textContent = t; $("logs").appendChild(li);
     }
@@ -225,6 +277,40 @@ async function fixResult(file, result) {
 </script>"""
 
 
+def review_html(store, link):
+    """「ブキの確認」タブ。直近の試合の8人のブキの読み取りを並べ、その場で直せるようにする。"""
+    rows, names = weapons.review(store, 20)
+    kl, _ = killcam.load_labels(store)
+    names = sorted(set(names) | {n for n in kl.values() if n and killcam.kind_of(n) == "メイン"})
+    esc = report.ESC
+    out = ['<datalist id="wnames">' + "".join(f'<option value="{esc(n)}">' for n in names) + "</datalist>",
+           '<p class="muted">直近20試合の読み取り結果です。黄色は候補どまり、赤は分からないブキ、青い枠は手で付けた名前です。'
+           '違っていたら名前を直すと、その絵が次から見本として使われます（まだ出たことのないブキも、ここで名前を付ければ覚えます）。</p>']
+    for m, row in rows:
+        strip = link(os.path.join(store.root, "weapons", m["weapon_icons"]))
+        me = None
+        cells = []
+        for k, w in enumerate(row):
+            if w is None:
+                cells.append('<div class="wcell"></div>')
+                continue
+            key, n, conf, side = w
+            if side == "me":
+                me = k
+            cells.append(f'<div class="wcell{" me" if side == "me" else ""}">'
+                         f'<div class="wimg" style="background-image:url(\'{strip}\');background-position:-{k * 60}px 0"></div>'
+                         f'<input class="{conf}" list="wnames" value="{esc(n or "")}" placeholder="{"分からない" if conf == "none" else ""}" '
+                         f'data-key="{esc(key)}"><div class="saved"></div></div>')
+        res = m.get("result") or ""
+        out.append(f'<div class="wmatch"><h2>{esc(m.get("played_at", "")[:16].replace("T", " "))}　{esc(m.get("rule") or "ルール不明")}　'
+                   f'<span class="res-{esc(res)}">{esc(res)}</span></h2>'
+                   f'<div class="wrow"><span class="side">味方</span>{"".join(cells[:4])}</div>'
+                   f'<div class="wrow"><span class="side">相手</span>{"".join(cells[4:])}</div></div>')
+    if not rows:
+        out.append('<p class="muted">ブキのアイコンの記録がまだありません</p>')
+    return "".join(out)
+
+
 # ---------- サーバー ----------
 def make_handler(store, get_video_dir, st, window):
     root = pathlib.Path(store.root).resolve()
@@ -243,10 +329,11 @@ def make_handler(store, get_video_dir, st, window):
 
     def page():
         with st.lock:
-            v = st.version
+            v = (st.version, weapons.labels_mtime(store))  # 試合が増えたか、ブキの名前が直されたら作り直す
         if cache["version"] != v:
             cache["html"] = report.render(store, get_video_dir(), link=link,
-                                          first_tabs=[("live", "試合中", LIVE_HTML)], head=APP_CSS, script=APP_JS)
+                                          first_tabs=[("live", "試合中", LIVE_HTML), ("wcheck", "ブキの確認", review_html(store, link))],
+                                          head=APP_CSS, script=APP_JS)
             cache["version"] = v
         return cache["html"]
 
@@ -286,7 +373,12 @@ def make_handler(store, get_video_dir, st, window):
             u = urllib.parse.urlparse(self.path)
             try:
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                if u.path == "/api/result" and body.get("result") in ("勝ち", "負け"):
+                if u.path == "/api/weapon" and ":" in str(body.get("key", "")):
+                    weapons.set_label(store, os.path.basename(body["key"]), str(body.get("name", "")).strip())
+                    with st.lock:
+                        st._push(st.logs, f"ブキの名前を直しました: {body['key']} → {body.get('name') or '（消した）'}")
+                    self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/result" and body.get("result") in ("勝ち", "負け"):
                     store.set_result(body["file"], body["result"])
                     with st.lock:
                         st.version += 1  # 画面を読み直させる

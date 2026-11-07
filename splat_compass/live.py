@@ -101,6 +101,34 @@ def status_dict(tr, t):
     return d
 
 
+def icon_data_url(icon):
+    import base64
+    import cv2
+    ok, buf = cv2.imencode(".png", icon[..., ::-1])
+    return "data:image/png;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""
+
+
+class WeaponReader:
+    """試合中に8人のブキの名前を決める。名前の見本は、名前が増えたら読み直す。"""
+
+    def __init__(self, store):
+        self.store, self.namer, self.mtime = store, None, None
+
+    def read(self, icons):
+        from . import weapons
+        mt = weapons.labels_mtime(self.store)
+        if self.namer is None or mt != self.mtime:
+            self.namer, self.mtime = weapons.Namer(self.store), mt
+        out = []
+        for ic in icons:
+            if ic is None:
+                out.append({"name": None, "conf": "none", "img": ""})
+            else:
+                n, conf = self.namer.predict(ic)
+                out.append({"name": n, "conf": conf, "img": icon_data_url(ic)})
+        return out
+
+
 def beep():
     try:
         import winsound
@@ -137,6 +165,7 @@ def worker(frames, store, source, out_q, stop):
             return
         when = dt.datetime.now() - dt.timedelta(seconds=(time.time() - began) - m.start) if source == "camera" else None
         p = store.save_match(m, source, when)
+        out_q.put(("weapons_saved", os.path.splitext(os.path.basename(p))[0]))
         res = m.result or "勝敗不明（中断扱い）"
         out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {res} → 保存しました"))
         out_q.put(("saved", p))
@@ -155,6 +184,13 @@ def worker(frames, store, source, out_q, stop):
     began = time.time()
     tr = Tracker(FPS, on_event=on_event, on_match_end=on_end)
     last_status, last_wp, cur_start = 0, 0, None
+    wreader, wsent = WeaponReader(store), None
+
+    def send_weapons(icons):
+        try:
+            out_q.put(("weapons", wreader.read(icons)))
+        except Exception as e:
+            out_q.put(("log", f"ブキを読めませんでした: {e}"))
     for t, img in frames:
         if stop.is_set():
             break
@@ -170,6 +206,11 @@ def worker(frames, store, source, out_q, stop):
             out_q.put(("status", status_text(tr, t)))
             out_q.put(("state", status_dict(tr, t)))
             last_status = time.time()
+        if start is not None and wsent != start:
+            icons = tr.match.icons
+            if all(i is not None for i in icons) or t - start > 60:  # 8人そろったら（遅くとも1分で）ブキを読む
+                wsent = start
+                threading.Thread(target=send_weapons, args=(list(icons),), daemon=True).start()
         if start is not None and t - last_wp >= 1.0:
             last_wp = t
             p, kind = win_prob(tr, t, models)

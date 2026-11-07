@@ -150,6 +150,18 @@ class Namer:
         j = int(s.argmax())
         return self.names[j], float(s[j])
 
+    def predict(self, icon, key=None):
+        """(名前, 確かさ)。確かさ: 'label' 手で付けた / 'auto' 似た絵がある / 'guess' 候補どまり / 'none' 分からない"""
+        n = self.labels.get(key) if key else None
+        if n:
+            return (None, "label") if n == UNKNOWN else (n, "label")
+        n, s = self.nearest(feature(icon))
+        if n and s >= AUTO:
+            return n, "auto"
+        if n and s >= HINT:
+            return n, "guess"
+        return None, "none"
+
     def name(self, key, icon):
         n = self.labels.get(key)
         if n:
@@ -165,6 +177,46 @@ def weapons_of(store, m, namer=None):
         return None
     namer = namer or Namer(store)
     return [namer.name(key_of(m, k), ic) if ic is not None else None for k, ic in enumerate(icons)]
+
+
+def set_label(store, key, name):
+    """1枚の絵の名前を手で決める（空なら手で付けた名前を消す）。次から名前を決める見本に使われる。"""
+    labels = load_labels(store)
+    if name:
+        labels[key] = name
+    else:
+        labels.pop(key, None)
+    save_labels(store, labels)
+
+
+def labels_mtime(store):
+    try:
+        return os.path.getmtime(os.path.join(store.root, "weapon_labels.json"))
+    except OSError:
+        return 0
+
+
+def review(store, last=20):
+    """直近の試合の8人のブキの読み取り結果。[(試合, [(キー, 名前, 確かさ, 自分から見た側) ×8 / 無い枠は None])]"""
+    ms = [m for m in store.matches() if m.get("weapon_icons")]
+    ms.sort(key=lambda m: m.get("played_at", ""), reverse=True)
+    ms = ms[:last]
+    namer = Namer(store)
+    out = []
+    for m in ms:
+        icons = load_strip(store, m)
+        if not icons:
+            continue
+        row = []
+        for k, ic in enumerate(icons):
+            if ic is None:
+                row.append(None)
+                continue
+            key = key_of(m, k)
+            n, conf = namer.predict(ic, key)
+            row.append((key, n, conf, _side(m, k)))
+        out.append((m, row))
+    return out, sorted(set(namer.names))
 
 
 # ---------- 前の録画から切り出す ----------
