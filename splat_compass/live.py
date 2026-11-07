@@ -18,7 +18,7 @@ import numpy as np
 from .hud import DEAD, SPECIAL
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
-from .tracker import KIND_LABEL, Tracker
+from .tracker import END_TRIM, KIND_LABEL, Tracker
 from . import learning, winprob
 
 FPS = 10  # 1秒に読むコマ数（溜まってすぐ使うスペシャルを見落とさないよう、多めに読む）
@@ -166,6 +166,8 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
 
     def on_end(m):
+        if m.end is not None:  # 終わりの演出中に読んだ分は捨てたので、グラフからも消す
+            out_q.put(("wp_trim", m.end - m.start - END_TRIM))
         if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < MIN_MATCH or len(m.events) < MIN_EVENTS):
             out_q.put(("log", f"短すぎる（{int((m.end or m.start) - m.start)}秒）ので試合として保存しませんでした"))
             return

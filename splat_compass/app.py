@@ -70,6 +70,8 @@ class State:
                     rel, p, k = msg
                     self.wp.append((round(rel, 1), round(p, 4)))
                     self.wp_kind = k
+                elif kind == "wp_trim":
+                    self.wp = [x for x in self.wp if x[0] <= msg]
                 elif kind == "wp_reset":
                     self.wp, self.wp_kind = [], None
                     self.weapons, self.weapons_file = None, None

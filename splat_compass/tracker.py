@@ -32,6 +32,9 @@ CP_FROM, CP_TO = 10.0, 50.0  # チェックポイントを探すために棒を�
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
 MASS_DEATH = 5       # 同時にこの人数以上が倒れたら、画面の切り替わりとみなす
+MASS_SPECIAL = 3     # 同時にこの人数以上のスペシャルが溜まったら、画面の演出で明るく見えたとみなす
+SP_MUTE = 1.5        # そのあとこの秒数は「溜まった」を記録しない
+END_TRIM = 3.0       # 試合の終わり（Finish! の演出）でこの秒数のあいだの出来事は読み違いとして捨てる
 
 KIND_LABEL = {
     "dead": "倒された",
@@ -354,10 +357,19 @@ class Tracker:
         if self.finished is not None:
             self._close_finished()
         self.match.end = t
+        self._trim_end(t)
         self._decide_self(final=True)
         self.finished, self.match = self.match, None
         self.cur = None
         self.ready_at = [None] * 8
+
+    def _trim_end(self, t):
+        """試合の終わりの演出（Finish! の帯や上部の表示が消えていく途中）で、倒された・溜まったと読み違えたものを捨てる。"""
+        m = self.match
+        drop = [e for e in m.events if e.t > t - END_TRIM]
+        if drop:
+            m.events = [e for e in m.events if e.t <= t - END_TRIM]
+            self.on_log(f"試合の終わりの演出中に読んだ出来事を{len(drop)}件取り消しました")
 
     def end_by_hand(self, t, result=None):
         """画面から試合の終わりを読み取れなかったときに、手で試合を終える。result: '勝ち' / '負け' / None"""
@@ -450,7 +462,9 @@ class Tracker:
         - 溜まってすぐ使った（エナジースタンドなど）: 溜まった表示が一瞬だけ出て、前後しばらく出ていないとき"""
         if self.cur is None:
             if None not in slots:
-                self.cur = list(slots)
+                # 始まった時点でスペシャルが溜まっている人はいない（開始の演出で明るく見えるのを溜まったと読まない）
+                self.cur = [ALIVE if x == SPECIAL else x for x in slots]
+                self.sp_mute = -1e9
                 self.hist = [deque() for _ in range(8)]
                 self.quick = [None] * 8   # 一瞬出た溜まった表示（始め, 終わり）。このあと出なければ「すぐ使った」
                 self.last_sp = [-1e9] * 8  # 最後に「溜まった」と読めた時刻
@@ -488,6 +502,15 @@ class Tracker:
         if dark >= MASS_DEATH:
             # 5人以上が同時に倒れることはまずない。回線落ちなどで画面が暗くなったとみなし、倒れたことにはしない
             commit = [(k, w) for k, w in commit if w != DEAD]
+        if t - self.match.start < IGNORE_FIRST:
+            commit = [(k, w) for k, w in commit if w != SPECIAL]  # 始まってすぐ溜まることはない
+        rising = [k for k, w in commit if w == SPECIAL and self.cur[k] != SPECIAL]
+        recent = sum(1 for e in self.match.events[-8:] if e.kind == "special_ready" and t - e.t < 0.5)
+        if len(rising) + recent >= MASS_SPECIAL:
+            # 何人ものスペシャルが同時に溜まることはまずない。画面全体が明るくなる演出とみなす
+            self.sp_mute = t + SP_MUTE
+        if t < self.sp_mute:
+            commit = [(k, w) for k, w in commit if not (w == SPECIAL and self.cur[k] != SPECIAL)]
         if not commit:
             return
         old = list(self.cur)
