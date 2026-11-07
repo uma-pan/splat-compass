@@ -140,6 +140,10 @@ APP_CSS = """<style>
 .wcell input.guess { background:#fff7d6; } .wcell input.none { background:#fde2e1; }
 .wcell input.label { border-color:#3d7bd9; } .wcell.me input { font-weight:bold; }
 .wcell .saved { color:#1a7f37; font-size:11px; height:14px; }
+table.info { border-collapse:collapse; background:#fff; border-radius:10px; font-size:12px; }
+table.info th, table.info td { padding:3px 8px; border-top:1px solid #eee; text-align:left; }
+table.info tr.empty td:first-child { color:#c0392b; }
+table.info input, table.info select { font-size:12px; font-family:inherit; padding:1px 4px; border:1px solid #d1d5db; border-radius:4px; }
 .wmatch { background:#fff; border-radius:10px; padding:8px 12px; margin:8px 0; }
 .wmatch h2 { font-size:13px; margin:0 0 4px; }
 .endbox { display:none; margin-top:8px; font-size:12px; color:#6b7280; }
@@ -264,6 +268,12 @@ function showWeapons(d) {
 }
 document.addEventListener("change", async e => {
   const el = e.target;
+  if (el.dataset && el.dataset.info) {  // ブキの情報の表
+    const r = await fetch("/api/weapon_info", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({name: el.dataset.info, field: el.dataset.field, value: el.value.trim()})});
+    el.style.borderColor = r.ok ? "#1a7f37" : "#c0392b";
+    return;
+  }
   if (!el.dataset || !el.dataset.key) return;
   const r = await fetch("/api/weapon", {method: "POST", headers: {"Content-Type": "application/json"},
                                         body: JSON.stringify({key: el.dataset.key, name: el.value.trim()})});
@@ -338,7 +348,37 @@ def review_html(store, link):
                    f'<div class="wrow"><span class="side">相手</span>{"".join(cells[4:])}</div></div>')
     if not rows:
         out.append('<p class="muted">ブキのアイコンの記録がまだありません</p>')
+    out.append(info_table(store, names))
     return "".join(out)
+
+
+def info_table(store, names):
+    """ブキの情報（種類・射程・サブ・スペシャル）の表。その場で直せる。"""
+    from . import weapon_info as wi
+    info = wi.Info(store)
+    esc = report.ESC
+    seen = sorted({wi.norm(n) for n in weapons.load_labels(store).values() if n and n != weapons.UNKNOWN} | set(names))
+    subs = sorted({v[0] for v in wi.KITS.values()})
+    sps = sorted({v[1] for v in wi.KITS.values()})
+    h = ['<h2 style="font-size:15px;margin-top:24px">ブキの情報</h2>',
+         '<p class="muted">編成でまとめた勝率に使います。射程はおおまかな目安です。空欄や違うところがあれば直してください（すぐ保存されます）。</p>',
+         '<datalist id="wsubs">' + "".join(f'<option value="{esc(x)}">' for x in subs) + "</datalist>",
+         '<datalist id="wsps">' + "".join(f'<option value="{esc(x)}">' for x in sps) + "</datalist>",
+         '<table class="info"><tr><th>ブキ</th><th>種類</th><th>射程</th><th>サブ</th><th>スペシャル</th></tr>']
+
+    def select(name, field, options, value):
+        opts = '<option value=""></option>' + "".join(
+            f'<option{" selected" if o == value else ""}>{esc(o)}</option>' for o in options)
+        return f'<select data-info="{esc(name)}" data-field="{field}">{opts}</select>'
+    for n in seen:
+        d = info.get(n)
+        empty = ' class="empty"' if not (d["サブ"] and d["スペシャル"] and d["種類"]) else ""
+        h.append(f'<tr{empty}><td>{esc(n)}</td>'
+                 f'<td>{select(n, "種類", wi.CLASSES, d["種類"])}</td><td>{select(n, "射程", wi.RANGES, d["射程"])}</td>'
+                 f'<td><input list="wsubs" data-info="{esc(n)}" data-field="サブ" value="{esc(d["サブ"] or "")}"></td>'
+                 f'<td><input list="wsps" data-info="{esc(n)}" data-field="スペシャル" value="{esc(d["スペシャル"] or "")}"></td></tr>')
+    h.append("</table>")
+    return "".join(h)
 
 
 # ---------- サーバー ----------
@@ -359,7 +399,9 @@ def make_handler(store, get_video_dir, st, cmds):
 
     def page():
         with st.lock:
-            v = (st.version, weapons.labels_mtime(store))  # 試合が増えたか、ブキの名前が直されたら作り直す
+            info_p = os.path.join(store.root, "weapon_info.json")
+            v = (st.version, weapons.labels_mtime(store),  # 試合が増えたか、ブキの名前・情報が直されたら作り直す
+                 os.path.getmtime(info_p) if os.path.exists(info_p) else 0)
         if cache["version"] != v:
             cache["html"] = report.render(store, get_video_dir(), link=link,
                                           first_tabs=[("live", "試合中", LIVE_HTML), ("wcheck", "ブキの確認", review_html(store, link))],
@@ -407,6 +449,10 @@ def make_handler(store, get_video_dir, st, cmds):
                     weapons.set_label(store, os.path.basename(body["key"]), str(body.get("name", "")).strip())
                     with st.lock:
                         st._push(st.logs, f"ブキの名前を直しました: {body['key']} → {body.get('name') or '（消した）'}")
+                    self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/weapon_info" and body.get("field") in ("種類", "射程", "サブ", "スペシャル"):
+                    from . import weapon_info
+                    weapon_info.set_override(store, str(body.get("name", "")), body["field"], str(body.get("value", "")).strip())
                     self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/end":
                     if cmds is None:

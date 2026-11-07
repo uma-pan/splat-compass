@@ -586,6 +586,62 @@ def stats(store, ms):
     return out, (named / seen if seen else None)
 
 
+def compositions(store, ms):
+    """試合ごとの編成。[(勝ったか, 味方4人の情報, 相手4人の情報)]（勝敗と自分の枠が分かる試合だけ）"""
+    from .weapon_info import Info
+    info = Info(store)
+    namer = Namer(store)
+    out = []
+    for m in ms:
+        if m.get("result") not in ("勝ち", "負け") or not m.get("me_slot"):
+            continue
+        names = weapons_of(store, m, namer)
+        if not names:
+            continue
+        me = SLOT_NAMES.index(m["me_slot"])
+        ally = [names[k] for k in (range(4) if me < 4 else range(4, 8))]
+        enemy = [names[k] for k in (range(4, 8) if me < 4 else range(4))]
+        out.append((m["result"] == "勝ち", [info.get(n) if n else None for n in ally],
+                    [info.get(n) if n else None for n in enemy]))
+    return out
+
+
+def group_stats(store, ms):
+    """編成でまとめた勝率。{見出し: [(項目, 試合数, 勝ち数)]}"""
+    comp = compositions(store, ms)
+    out = {}
+
+    def count_rows(side, key, value):
+        rows = defaultdict(lambda: [0, 0])
+        for win, ally, enemy in comp:
+            team = ally if side == "ally" else enemy
+            if any(x is None for x in team):  # 4人とも分かる試合だけ
+                continue
+            n = sum(x[key] == value for x in team)
+            label = f"{min(n, 3)}人" + ("以上" if n >= 3 else "")
+            rows[label][0] += 1
+            rows[label][1] += win
+        return [(k, c, w) for k, (c, w) in sorted(rows.items())]
+
+    def presence(side, key):
+        rows = defaultdict(lambda: [0, 0])
+        for win, ally, enemy in comp:
+            team = ally if side == "ally" else enemy
+            seen = {x[key] for x in team if x and x.get(key)}
+            for v in seen:
+                rows[v][0] += 1
+                rows[v][1] += win
+        return [(k, c, w) for k, (c, w) in rows.items()]
+
+    out["相手の射程の長いブキの数"] = count_rows("enemy", "射程", "長")
+    out["味方の射程の長いブキの数（自分を含む）"] = count_rows("ally", "射程", "長")
+    out["相手の射程の短いブキの数"] = count_rows("enemy", "射程", "短")
+    out["相手にいたブキの種類"] = presence("enemy", "種類")
+    out["相手にいたスペシャル"] = presence("enemy", "スペシャル")
+    out["味方にいたスペシャル（自分を含む）"] = presence("ally", "スペシャル")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", help="記録の保存先")

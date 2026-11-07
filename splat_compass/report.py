@@ -288,6 +288,21 @@ def section_weapons(store, ms):
     body += card("相手にいると負けやすいブキ", chart(rows("enemy", "low"), "#c0392b"))
     body += card("味方にいると勝ちやすいブキ", chart(rows("ally", "high"), "#27ae60"))
     body += card("相手にいても勝てているブキ", chart(rows("enemy", "high"), "#888"))
+    # 種類・射程・スペシャルでまとめた勝率（1つ1つのブキより試合数が多く、数字が安定する）
+    try:
+        gs = weapons.group_stats(store, ms)
+    except Exception as e:
+        gs = {}
+        body += card("編成でまとめた勝率", f'<p class="muted">作れませんでした: {ESC(str(e))}</p>', wide=True)
+    for title, rs in gs.items():
+        if title.endswith("の数") or "の数（" in title:
+            items = [(f"{k}（{c}試合）", w / c) for k, c, w in rs if c]
+        else:
+            items = [(f"{k}（{c}試合）", w / c) for k, c, w in sorted(rs, key=lambda x: x[2] / x[1]) if c >= 5]
+        body += card(title, bars(items[:15], pct, "#7b61c9", 1.0) if items else '<p class="muted">まだ試合が足りません</p>')
+    body += card("ブキの情報について", '<p class="muted">射程の長い・短いは、メインのブキごとのおおまかな目安です。'
+                 'サブ・スペシャルは攻略サイトの一覧から入れたもので、新しい亜種などは空のことがあります。'
+                 '「ブキの確認」タブの下の表で直せます。</p>', wide=True)
     return '<div class="grid2">' + body + "</div>"
 
 
