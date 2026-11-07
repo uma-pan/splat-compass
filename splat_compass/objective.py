@@ -60,6 +60,20 @@ def push_episodes(m):
     return eps
 
 
+def checkpoint_times(m):
+    """各チェックポイントが最初に通られた時刻（試合開始からの秒）と、どちらが通ったか。
+    中央より左（味方側）のチェックポイントは相手が、右（敵側）は味方が通る。中央に近い順に並べる。"""
+    cps = m.get("checkpoints") or []
+    pts = _smooth_positions(m.get("objective") or [])
+    out = []
+    for c in sorted(cps, key=abs):
+        who = "味方" if c > 0 else "敵"
+        hit = next((t for t, p in pts if (p >= c if c > 0 else p <= c)), None)
+        out.append({"pos": c, "by": who, "t": None if hit is None else hit - m["video_start"],
+                    "order": sum(1 for x in cps if (x > 0) == (c > 0) and abs(x) < abs(c)) + 1})
+    return out
+
+
 def asari_episodes(m):
     """ゴールが開いていた区間のうち、相手のカウントが減ったもの（味方のゴールが割られた）。"""
     obj = m.get("objective") or []
@@ -84,6 +98,27 @@ def _avg(xs):
     return sum(xs) / len(xs) if xs else float("nan")
 
 
+def _report_checkpoints(ms):
+    """一番中央に近いチェックポイント（第1チェックポイント）を、どちらが先に、何秒で取ったか。"""
+    rows = []
+    for m in ms:
+        first = [x for x in checkpoint_times(m) if x["order"] == 1 and x["t"] is not None]
+        if not first:
+            continue
+        f = min(first, key=lambda x: x["t"])
+        rows.append((m, f))
+    if not rows:
+        print("  チェックポイントの記録がまだありません")
+        return
+    for who in ("味方", "敵"):
+        g = [(m, f) for m, f in rows if f["by"] == who]
+        known = [m for m, _ in g if m.get("result") in ("勝ち", "負け")]
+        wins = sum(m["result"] == "勝ち" for m in known)
+        if g:
+            print(f"  第1チェックポイントを先に取ったのが{who}: {len(g)}試合  平均{_avg([f['t'] for _, f in g]):.0f}秒で取得"
+                  + (f"  勝率{wins / len(known) * 100:.0f}%" if known else ""))
+
+
 def report(matches):
     for rule in ("ガチヤグラ", "ガチホコ"):
         ms = [m for m in matches if m.get("rule") == rule and m.get("objective")]
@@ -97,6 +132,7 @@ def report(matches):
         print(f"  押し込まれた深さの平均 {_avg([-e['deepest'] for _, e in eps]) * 100:.0f}%（ゴールまでを100%として）")
         if rule == "ガチホコ":
             print(f"  そのうちリセットで中央に戻ったもの {sum(e['reset'] for e in ok)}回")
+        _report_checkpoints(ms)
         for res in ("勝ち", "負け"):
             g = [e for m, e in eps if m.get("result") == res]
             n = sum(1 for m in ms if m.get("result") == res)

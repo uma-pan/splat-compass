@@ -42,6 +42,7 @@ class Store:
             "timeline": m.timeline,
             "objective_columns": ["時刻", "ヤグラ・ホコの位置（-1が味方のゴール、+1が敵のゴール）", "アサリのゴールが開いている"],
             "objective": m.objective,
+            "checkpoints": m.checkpoints,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

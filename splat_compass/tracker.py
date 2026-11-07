@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 
 from .hud import (DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  read_counts, read_objective_pos, read_slots)
+                  bar_band, find_checkpoints, read_counts, read_objective_pos, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
@@ -16,6 +16,7 @@ GAUGE_MIN = 10            # ゲージが満タンのコマがこれだけ貯ま�
 GAUGE_MARGIN = 30         # 一番ゲージと合う枠が、二番目よりこれだけ多く合っていること
 RESPAWN_AFTER = 8.0        # 復活待ち表示が出てから何秒以内に復活するか
 FAKE_MATCH = 60.0    # これより短い区間は試合ではないとみなす（秒）
+CP_FROM, CP_TO = 10.0, 50.0  # チェックポイントを探すために棒を集める区間（試合開始からの秒）
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
 MASS_DEATH = 5       # 同時にこの人数以上が倒れたら、画面の切り替わりとみなす
@@ -59,6 +60,7 @@ class Match:
     me_by_gauge: bool = False
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている]
+    checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
     events: list = field(default_factory=list)
@@ -155,6 +157,13 @@ class Tracker:
             if c is not None:
                 self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3])])
             rule = self.match.rule
+            if rule in ("ガチヤグラ", "ガチホコ", None) and self.match.checkpoints is None:
+                rel = t - self.match.start
+                if CP_FROM <= rel <= CP_TO:
+                    self.cp_bands.append(bar_band(img))
+                elif rel > CP_TO and len(self.cp_bands) >= 10:
+                    self.match.checkpoints = find_checkpoints(self.cp_bands)
+                    self.cp_bands = []
             if rule in ("ガチヤグラ", "ガチホコ"):
                 p = read_objective_pos(img)
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), 0])
@@ -192,6 +201,7 @@ class Tracker:
         self.on_n, self.off_since = 0, None
         self.ready_at = [None] * 8
         self.resp_prev = False
+        self.cp_bands = []
 
     def _gauge_vote(self, full):
         """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""

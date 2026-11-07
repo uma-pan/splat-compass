@@ -134,6 +134,36 @@ def read_objective_pos(img):
     return None
 
 
+def bar_band(img):
+    """チェックポイント探し用に、棒のまわりを白黒で切り出す。"""
+    return cv2.cvtColor(np.ascontiguousarray(img[BAR_Y - 30:BAR_Y + 30, 480:1440]), cv2.COLOR_RGB2GRAY)
+
+
+def find_checkpoints(bands):
+    """試合序盤の棒の切り抜きを何枚も重ねて中央値をとると、動く背景がぼけて棒の上の目印だけがくっきり残る。
+    目印（チェックポイント）の位置を -1〜+1 の並びで返す。両端のゴールと中央のヤグラ・ホコは除く。"""
+    med = np.median(np.stack(bands), axis=0).astype(np.float32)
+    mag = np.hypot(cv2.Sobel(med, cv2.CV_32F, 1, 0), cv2.Sobel(med, cv2.CV_32F, 0, 1))
+    rows = list(range(17, 23)) + list(range(38, 44))  # 点線より少し上と下（点は小さいので引っかからない）
+    e = np.convolve((mag[rows] > 80).sum(axis=0).astype(float), np.ones(5) / 5, mode="same")
+    e[:540 - 480] = 0   # 両端のゴールの丸は先に消しておく（近くの目印とくっつかないように）
+    e[1380 - 480:] = 0
+    blobs = []
+    for c in np.where(e >= 2.5)[0]:
+        if blobs and c - blobs[-1][-1] <= 25:  # ホコの山形の目印は2つに割れやすいのでまとめる
+            blobs[-1].append(c)
+        else:
+            blobs.append([c])
+    out = []
+    for bl in blobs:
+        if len(bl) < 10:
+            continue
+        p = (480 + float(np.mean(bl)) - BAR_CENTER) / (BAR_RIGHT - BAR_CENTER)
+        if 0.1 < abs(p) < 0.93:
+            out.append(round(p, 3))
+    return out
+
+
 _yy, _xx = np.mgrid[0:80, 0:100]
 _PIE_RING = (np.hypot(_yy - 40, _xx - 50) > 26) & (np.hypot(_yy - 40, _xx - 50) < 33)
 
