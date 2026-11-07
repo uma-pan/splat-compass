@@ -51,6 +51,17 @@ class Store:
                 if ok:
                     buf.tofile(os.path.join(mdir, fname))
                     map_shots.append({"t": round(t, 1), "rel": round(t - m.start, 1), "image": fname})
+        result_check = None
+        if getattr(m, "result_check", None):
+            import cv2
+            img, scores = m.result_check
+            ddir = os.path.join(self.root, "results")
+            os.makedirs(ddir, exist_ok=True)
+            fname = os.path.splitext(os.path.basename(path))[0] + ".jpg"
+            ok, buf = cv2.imencode(".jpg", img[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                buf.tofile(os.path.join(ddir, fname))
+                result_check = {"image": fname, "win": scores[0], "lose": scores[1]}
         weapon_icons = None
         icons = getattr(m, "icons", None)
         if icons and any(i is not None for i in icons):
@@ -76,6 +87,7 @@ class Store:
             "killed_by": killed_by,
             "map_shots": map_shots,
             "weapon_icons": weapon_icons,
+            "result_check": result_check,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
@@ -89,6 +101,17 @@ class Store:
             d["_file"] = os.path.basename(p)
             out.append(d)
         return out
+
+    def set_result(self, fname, result):
+        """勝敗を手で直す（読み違えていたとき）。"""
+        p = os.path.join(self.mdir, os.path.basename(fname))
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        d["result"] = result
+        d["interrupted"] = result is None and d.get("interrupted", False)
+        d["result_fixed"] = True
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
 
     def load(self, path):
         with open(path, encoding="utf-8") as f:

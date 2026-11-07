@@ -354,6 +354,7 @@ class ScreenReader:
 
     def __init__(self):
         w = RESULT_BOX[2]
+        self.last_scores = (0.0, 0.0)  # 最後に見たコマの (WIN! との一致度, LOSE... との一致度)
         self.win = _load_mask("win.png", w)
         self.lose = _load_mask("lose.png", w)
         self.rules = {RULE_NAMES[k]: _load_mask(f"rule_{k}.png") for k in RULE_NAMES}
@@ -362,6 +363,7 @@ class ScreenReader:
         """('勝ち'|'負け', 一致度) か (None, 一致度)。"""
         m = white(_crop(img, RESULT_BOX))
         a, b = iou(m, self.win), iou(m, self.lose)
+        self.last_scores = (round(a, 3), round(b, 3))
         if max(a, b) < 0.45:
             return None, max(a, b)
         return ("勝ち" if a > b else "負け"), max(a, b)

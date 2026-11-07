@@ -324,14 +324,27 @@ def section_model(store, ms):
     return '<div class="grid2">' + "".join(out) + "</div>"
 
 
-def section_feedback(store):
+def section_feedback(store, link=None, app=False):
     blocks = []
     color = {"気になる": "#c0392b", "良い": "#1a7f37", "情報": "#6b7280"}
     for m, items in feedback.for_latest(store, 15):
         res = m.get("result") or ""
         lis = "".join(f'<li><span class="tag" style="background:{color[k]}">{ESC(k)}</span>{ESC(t)}</li>' for k, t in items)
+        fix = ""
+        if app:  # アプリの画面では、勝敗を読み違えていたら直せる
+            rc = m.get("result_check") or {}
+            img = ""
+            if rc.get("image") and link:
+                img = (f'<a href="{link(os.path.join(store.root, "results", rc["image"]))}" target="_blank">'
+                       f'<img src="{link(os.path.join(store.root, "results", rc["image"]))}" height="54" '
+                       f'title="勝敗を読んだ画面（WIN! {rc.get("win")} / LOSE {rc.get("lose")}）"></a>')
+            f = ESC(m["_file"])
+            fix = (f'<div class="fix">{img}<span class="muted">勝敗が違っていたら:</span>'
+                   f'<button onclick="fixResult(\'{f}\', \'勝ち\')">勝ちに直す</button>'
+                   f'<button onclick="fixResult(\'{f}\', \'負け\')">負けに直す</button>'
+                   + ('<span class="muted">（手で直した）</span>' if m.get("result_fixed") else "") + "</div>")
         blocks.append(f'<section><h2>{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
-                      f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2><ul class="fb">{lis}</ul></section>')
+                      f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2>{fix}<ul class="fb">{lis}</ul></section>')
     return ('<p class="muted">新しい15試合を、それぞれの試合より前の自分（普段の自分）と比べて、目立ったところだけを挙げています。'
             '時刻は試合開始からの秒です。</p>' + "".join(blocks))
 
@@ -383,6 +396,8 @@ section h2 {{ font-size:14px; margin:0 0 6px; }}
 .maps {{ font-size:12px; color:var(--muted); padding-top:4px; }}
 ul.fb {{ list-style:none; padding:0; margin:0; font-size:13px; }} ul.fb li {{ padding:4px 0; border-top:1px solid #eee; }}
 .tag {{ color:#fff; font-size:11px; border-radius:4px; padding:1px 6px; margin-right:8px; }}
+.fix {{ display:flex; align-items:center; gap:8px; margin:2px 0 6px; font-size:12px; }} .fix img {{ border-radius:4px; }}
+.fix button {{ font-size:12px; padding:2px 8px; cursor:pointer; }}
 </style>{head}</head><body>
 <header><h1>splat-compass</h1><span>{subtitle}</span></header>
 <nav>{tabs}</nav>
@@ -416,7 +431,7 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
     ms.sort(key=lambda m: m.get("played_at", ""))
     tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
     tabs += [("overview", "概要", lambda: section_overview(ms)),
-            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store)),
+            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, bool(first_tabs))),
             ("rules", "ルール別・打開", lambda: section_rules(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
             ("weapons", "ブキ別の勝率", lambda: section_weapons(store, ms)),

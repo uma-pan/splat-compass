@@ -216,6 +216,12 @@ async function poll() {
   setTimeout(poll, 500);
 }
 poll();
+
+async function fixResult(file, result) {
+  const r = await fetch("/api/result", {method: "POST", headers: {"Content-Type": "application/json"},
+                                        body: JSON.stringify({file, result})});
+  if (!r.ok) alert("直せませんでした: " + await r.text());
+}
 </script>"""
 
 
@@ -275,6 +281,21 @@ def make_handler(store, get_video_dir, st, window):
                 pass
             except Exception as e:  # 画面に理由を出す
                 self._send(500, f"エラー: {e}".encode("utf-8"), "text/plain; charset=utf-8")
+
+        def do_POST(self):
+            u = urllib.parse.urlparse(self.path)
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                if u.path == "/api/result" and body.get("result") in ("勝ち", "負け"):
+                    store.set_result(body["file"], body["result"])
+                    with st.lock:
+                        st.version += 1  # 画面を読み直させる
+                        st._push(st.logs, f"勝敗を手で直しました: {body['file']} → {body['result']}")
+                    self._send(200, b"ok", "text/plain")
+                else:
+                    self._send(404, b"not found", "text/plain")
+            except Exception as e:
+                self._send(500, f"{e}".encode("utf-8"), "text/plain; charset=utf-8")
 
         def _file(self, base, rel):
             p = (base / urllib.parse.unquote(rel)).resolve()

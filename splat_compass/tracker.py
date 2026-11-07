@@ -58,6 +58,7 @@ class Match:
     end: float = None
     rule: str = None
     result: str = None
+    result_check: tuple = None  # 勝敗を決めた画面の縮小画像と一致度（読み違いを確かめる用）
     me_slot: str = None  # 自分の枠（スペシャルゲージと復活待ち表示から推定）
     gauge_votes: list = field(default_factory=lambda: [0, 0, 0, 0])  # 味方4枠それぞれの、ゲージとの一致度
     gauge_full_frames: int = 0
@@ -86,7 +87,7 @@ class Tracker:
         self.on_n, self.off_since = 0, None
         self.last_rule = (None, -1e9)   # (ルール名, 見た時刻)
         self.ready_at = [None] * 8  # 各枠のスペシャルが溜まった時刻
-        self.res_n = 0
+        self.res_n, self.res_prev = 0, None
         self.resp_prev = False
         self.last_t = 0.0
         self.last_count_t = -1e9
@@ -129,21 +130,17 @@ class Tracker:
             self._idle(t, img, known)
             return
         # 試合中。勝敗の表示は、上部の表示が消えるより先に出ることがあるので、ここでも見る
-        res, _ = self.screens.result(img)
-        self.res_n = self.res_n + 1 if res else 0
-        if self.res_n >= 2:  # 2コマ続けて見えたら確定（試合中の誤判定を避ける）
-            self.res_n = 0
+        res = self._result_seen(img)
+        if res:
             if self.finished is not None and t - self.match.start < FAKE_MATCH:
                 # 試合後の画面を「試合開始」と読み違えていた。勝敗は直前の試合のもの
                 self.match = None
                 self.cur = None
-                self.finished.result = res
-                self._close_finished()
+                self._set_result(self.finished, res, img)
             else:
                 self._end(t)
                 if self.finished is not None:
-                    self.finished.result = res
-                    self._close_finished()
+                    self._set_result(self.finished, res, img)
             return
         if known < 6:
             if self.off_since is None:
@@ -227,10 +224,9 @@ class Tracker:
         if rule:
             self.last_rule = (rule, t)
         if self.finished is not None:
-            res, _ = self.screens.result(img)
+            res = self._result_seen(img)
             if res:
-                self.finished.result = res
-                self._close_finished()
+                self._set_result(self.finished, res, img)
         if known >= 6:
             self.on_n += 1
             if self.on_n >= START_FRAMES:
@@ -306,6 +302,24 @@ class Tracker:
         self.finished, self.match = self.match, None
         self.cur = None
         self.ready_at = [None] * 8
+
+    def _result_seen(self, img):
+        """勝敗の表示が同じ読みで2コマ続いたら、その読み（'勝ち'/'負け'）。それまでは None。"""
+        res, _ = self.screens.result(img)
+        if res and res == self.res_prev:
+            self.res_n += 1
+        else:
+            self.res_n = 1 if res else 0
+        self.res_prev = res
+        if self.res_n >= 2:
+            self.res_n = 0
+            return res
+        return None
+
+    def _set_result(self, m, res, img):
+        m.result = res
+        m.result_check = (cv2.resize(img, (480, 270), interpolation=cv2.INTER_AREA), self.screens.last_scores)
+        self._close_finished()
 
     def _close_finished(self):
         m, self.finished = self.finished, None
