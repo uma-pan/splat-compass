@@ -295,7 +295,9 @@ def label_gui(store):
     import tkinter as tk
     from tkinter import ttk
 
+    print("アイコンをまとめています…")
     groups, items = queue(store)
+    print(f"{len(groups)}まとまりあります。名前を付ける画面を開きます（タスクバーも見てください）")
     if not groups:
         print("名前の分からないアイコンはありません")
         return
@@ -391,7 +393,13 @@ def label_gui(store):
     tk.Button(bottom, text="終わる", font=("Meiryo", 11), command=root.destroy).pack(side="right")
     root.bind("<Return>", ok)
     show()
+    # ほかの窓の後ろに隠れないよう、開いたときだけ一番手前に出す
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(800, lambda: root.attributes("-topmost", False))
+    root.focus_force()
     root.mainloop()
+    print("名前を付ける画面を閉じました")
 
 
 # ---------- 集計 ----------
