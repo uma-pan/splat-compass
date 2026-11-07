@@ -51,6 +51,11 @@ class Store:
                 if ok:
                     buf.tofile(os.path.join(mdir, fname))
                     map_shots.append({"t": round(t, 1), "rel": round(t - m.start, 1), "image": fname})
+        weapon_icons = None
+        icons = getattr(m, "icons", None)
+        if icons and any(i is not None for i in icons):
+            from . import weapons
+            weapon_icons = weapons.save_strip(self, os.path.splitext(os.path.basename(path))[0], icons)
         data = {
             "played_at": when.isoformat(timespec="seconds"),
             "source": source,
@@ -70,6 +75,7 @@ class Store:
             "checkpoints": m.checkpoints,
             "killed_by": killed_by,
             "map_shots": map_shots,
+            "weapon_icons": weapon_icons,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

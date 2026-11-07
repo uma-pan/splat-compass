@@ -49,6 +49,12 @@ def read_slots(img):
     return out
 
 
+def crop_icon(img, k):
+    """k番目の枠のアイコン（84x80）。ブキの絵が入っている。"""
+    x = SLOT_X[k]
+    return img[SLOT_Y - 40:SLOT_Y + 44, x - 40:x + 40].copy()
+
+
 def me_respawning(img):
     x0, x1, y0, y1 = RESPAWN_BOX
     p = img[y0:y1, x0:x1].astype(np.int16)

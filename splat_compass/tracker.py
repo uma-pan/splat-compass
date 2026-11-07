@@ -6,12 +6,13 @@ from dataclasses import dataclass, field
 
 import cv2
 
-from .hud import (DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_killcam, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
+from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
+                  bar_band, crop_icon, crop_killcam, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
+ICON_FROM, ICON_TO = 15.0, 60.0  # ブキのアイコンを切り出す時間帯（試合開始からの秒）
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
 GAUGE_MIN = 10            # ゲージが満タンのコマがこれだけ貯まったら、ゲージで自分の枠を決める
@@ -64,6 +65,7 @@ class Match:
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
     map_shots: list = field(default_factory=list)  # [(時刻, マップ画面の縮小画像)]
     killcams: list = field(default_factory=list)  # [(時刻, 倒されたときの吹き出しの切り抜き)]
+    icons: list = field(default_factory=lambda: [None] * 8)  # 8人のブキのアイコン（生きている時の絵）
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
@@ -185,6 +187,11 @@ class Tracker:
                 p = read_objective_pos(img)
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), int(asari_goal_open(img))])
         self._update_slots(t, slots)
+        rel = t - self.match.start
+        if ICON_FROM <= rel <= ICON_TO and any(i is None for i in self.match.icons):
+            for k in range(8):
+                if self.match.icons[k] is None and slots[k] == ALIVE:
+                    self.match.icons[k] = crop_icon(img, k)
         if self.cur is not None:
             self._gauge_vote(me_special_full(img))
 

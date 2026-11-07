@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import analyze, area, feedback, killcam, objective, scenes, winprob
+from . import analyze, area, feedback, killcam, objective, scenes, weapons, winprob
 from .storage import Store
 
 ESC = html.escape
@@ -256,6 +256,36 @@ def section_killers(store, ms):
     return '<div class="grid2">' + body + "</div>"
 
 
+def section_weapons(store, ms):
+    st, rate = weapons.stats(store, ms)
+    if rate is None:
+        return ('<p class="muted">ブキのアイコンの記録がまだありません。前の録画からは '
+                '<code>python -m splat_compass.weapons --extract</code> で切り出せます。</p>')
+    known = [m for m in ms if m.get("result") in ("勝ち", "負け")]
+    base = sum(m["result"] == "勝ち" for m in known) / len(known) if known else 0.5
+    MIN = 3
+
+    def rows(side, order):
+        r = [(n, c, w / c) for n, (c, w) in st[side].items() if c >= MIN]
+        r.sort(key={"low": lambda x: (x[2], -x[1]), "high": lambda x: (-x[2], -x[1]),
+                    "many": lambda x: -x[1]}[order])
+        return [(f"{n}（{c}試合）", v) for n, c, v in r]
+
+    def chart(items, color):
+        if not items:
+            return f'<p class="muted">{MIN}試合以上出てきたブキがまだありません</p>'
+        return bars(items[:15], pct, color, 1.0)
+
+    body = card("名前の分かったアイコン", f'<p>{pct(rate)}（全体の勝率 {pct(base)}）。'
+                '残りは <code>python -m splat_compass.weapons --label</code> で名前を付けられます。'
+                '試合数が少ないブキの勝率は、たまたまの影響が大きいので参考程度に見てください。</p>', wide=True)
+    body += card("自分が使ったブキ", chart(rows("me", "many"), "#3d7bd9"))
+    body += card("相手にいると負けやすいブキ", chart(rows("enemy", "low"), "#c0392b"))
+    body += card("味方にいると勝ちやすいブキ", chart(rows("ally", "high"), "#27ae60"))
+    body += card("相手にいても勝てているブキ", chart(rows("enemy", "high"), "#888"))
+    return '<div class="grid2">' + body + "</div>"
+
+
 def section_model(store, ms):
     hist_path = os.path.join(store.root, "model_history.json")
     try:
@@ -387,6 +417,7 @@ def build(store, video_dir=None):
             ("feedback", "試合ごとの振り返り", lambda: section_feedback(store)),
             ("rules", "ルール別・打開", lambda: section_rules(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
+            ("weapons", "ブキ別の勝率", lambda: section_weapons(store, ms)),
             ("model", "勝率モデル", lambda: section_model(store, ms))]
     if video_dir and os.path.isdir(video_dir):
         def sc():
