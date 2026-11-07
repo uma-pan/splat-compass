@@ -221,6 +221,18 @@ def asari_goal_open(img):
     return bool(((mx < 60) | ((s > 90) & (mx > 110)))[_PIE_RING].mean() > 0.75)
 
 
+KILLCAM_BOX = (780, 250, 370, 160)  # 倒されたときの吹き出し「〇〇 で やられた!」（x, y, 幅, 高さ）
+
+
+def crop_killcam(img):
+    """倒されたときの吹き出しを切り出す。吹き出しが出ていなければ None。"""
+    x, y, w, h = KILLCAM_BOX
+    c = img[y:y + h, x:x + w]
+    if (c.max(axis=2) < 60).mean() < 0.25:  # 吹き出しの暗い地が見えない
+        return None
+    return np.ascontiguousarray(c)
+
+
 def _crop(img, box):
     x, y, w, h = box
     return img[y:y + h, x:x + w]

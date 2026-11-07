@@ -107,6 +107,17 @@ python -m splat_compass.scenes "D:\Spla Capture"
 python -m splat_compass.scenes "D:\Spla Capture" --last 10   # 新しい10試合だけ
 ```
 
+### 倒されたブキ
+
+自分が倒されたときの吹き出し（「〇〇 で やられた!」）を保存し、「〇〇 で」の文字の形を見本と照らし合わせて、倒されたブキを数えます。同じブキなら文字の形は毎回同じなので、似た形をまとめて一度だけ名前を付ければ、あとは自動で分かります。
+
+```
+python -m splat_compass.killcam            # 名前の無いまとまりの一覧を作る
+python -m splat_compass.killcam --report   # 倒されたブキの集計
+```
+
+名前は `splat-compass-data\killcam_labels.json` に「まとまりの番号: ブキ名」の形で書きます。
+
 ### 動作確認
 
 録画を、実際の速さでその場の映像のように流せます。

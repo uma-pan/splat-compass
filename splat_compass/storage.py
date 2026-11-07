@@ -27,6 +27,18 @@ class Store:
         while os.path.exists(path):
             n += 1
             path = os.path.join(self.mdir, f"{name}-{n}.json")
+        killed_by = []
+        if getattr(m, "killcams", None):
+            import cv2
+            kdir = os.path.join(self.root, "killcam")
+            os.makedirs(kdir, exist_ok=True)
+            stem = os.path.splitext(os.path.basename(path))[0]
+            for i, (t, img) in enumerate(m.killcams):
+                fname = f"{stem}_{i:02d}.png"
+                ok, buf = cv2.imencode(".png", img[..., ::-1])
+                if ok:
+                    buf.tofile(os.path.join(kdir, fname))
+                    killed_by.append({"t": round(t, 1), "rel": round(t - m.start, 1), "image": fname})
         data = {
             "played_at": when.isoformat(timespec="seconds"),
             "source": source,
@@ -44,6 +56,7 @@ class Store:
             "objective_columns": ["時刻", "ヤグラ・ホコの位置（-1が味方のゴール、+1が敵のゴール）", "アサリのゴールが開いている"],
             "objective": m.objective,
             "checkpoints": m.checkpoints,
+            "killed_by": killed_by,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

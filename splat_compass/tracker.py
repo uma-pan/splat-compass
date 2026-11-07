@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 
 from .hud import (DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, find_checkpoints, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_killcam, find_checkpoints, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
@@ -60,6 +60,7 @@ class Match:
     me_by_gauge: bool = False
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
+    killcams: list = field(default_factory=list)  # [(時刻, 倒されたときの吹き出しの切り抜き)]
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
@@ -150,6 +151,9 @@ class Tracker:
         if resp and not self.resp_prev:
             self.match.respawn_marks.append(t)
             self._decide_self()
+            kc = crop_killcam(img)
+            if kc is not None:
+                self.match.killcams.append((t, kc))
         self.resp_prev = resp
         if t - self.last_count_t >= 1.0:
             self.last_count_t = t
