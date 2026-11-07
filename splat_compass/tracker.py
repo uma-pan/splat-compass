@@ -4,8 +4,10 @@
 """
 from dataclasses import dataclass, field
 
+import cv2
+
 from .hud import (DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_killcam, find_checkpoints, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_killcam, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
@@ -60,6 +62,7 @@ class Match:
     me_by_gauge: bool = False
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
+    map_shots: list = field(default_factory=list)  # [(時刻, マップ画面の縮小画像)]
     killcams: list = field(default_factory=list)  # [(時刻, 倒されたときの吹き出しの切り抜き)]
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
@@ -161,6 +164,10 @@ class Tracker:
             if c is not None:
                 pl, pr = read_penalty(img)
                 self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3]), pl, pr])
+            on_map = is_map_screen(img)
+            if on_map and not self.map_prev:  # マップ画面が出るたびに1枚残す
+                self.match.map_shots.append((t, cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)))
+            self.map_prev = on_map
             rule = self.match.rule
             if rule in ("ガチヤグラ", "ガチホコ", None) and self.match.checkpoints is None:
                 rel = t - self.match.start
@@ -207,6 +214,7 @@ class Tracker:
         self.ready_at = [None] * 8
         self.resp_prev = False
         self.cp_bands = []
+        self.map_prev = False
 
     def _gauge_vote(self, full):
         """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""

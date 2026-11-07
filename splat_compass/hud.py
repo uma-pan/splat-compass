@@ -233,6 +233,22 @@ def crop_killcam(img):
     return np.ascontiguousarray(c)
 
 
+MAP_PILL_BOX = (780, 950, 360, 90)  # マップ画面の下中央に出る「スタート地点」の枠
+_MAP_TPL = None
+
+
+def is_map_screen(img):
+    """マップ画面（復活待ちに自動で出るものと、自分で開いたもの）か。
+    下中央の「スタート地点」の文字の形を、白黒の濃淡の相関で照らし合わせる（薄く出ている場合もあるため）。"""
+    global _MAP_TPL
+    if _MAP_TPL is None:
+        t = cv2.imdecode(np.fromfile(os.path.join(TEMPLATE_DIR, "map_pill.png"), np.uint8), cv2.IMREAD_GRAYSCALE)
+        _MAP_TPL = t[18:68, 125:315]
+    x, y, w, h = MAP_PILL_BOX
+    g = cv2.cvtColor(np.ascontiguousarray(img[y:y + h, x:x + w]), cv2.COLOR_RGB2GRAY)
+    return bool(cv2.matchTemplate(g, _MAP_TPL, cv2.TM_CCOEFF_NORMED).max() > 0.7)
+
+
 def _crop(img, box):
     x, y, w, h = box
     return img[y:y + h, x:x + w]

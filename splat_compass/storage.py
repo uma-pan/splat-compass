@@ -39,6 +39,18 @@ class Store:
                 if ok:
                     buf.tofile(os.path.join(kdir, fname))
                     killed_by.append({"t": round(t, 1), "rel": round(t - m.start, 1), "image": fname})
+        map_shots = []
+        if getattr(m, "map_shots", None):
+            import cv2
+            mdir = os.path.join(self.root, "maps")
+            os.makedirs(mdir, exist_ok=True)
+            stem = os.path.splitext(os.path.basename(path))[0]
+            for i, (t, img) in enumerate(m.map_shots):
+                fname = f"{stem}_{i:02d}.jpg"
+                ok, buf = cv2.imencode(".jpg", img[..., ::-1], [cv2.IMWRITE_JPEG_QUALITY, 85])
+                if ok:
+                    buf.tofile(os.path.join(mdir, fname))
+                    map_shots.append({"t": round(t, 1), "rel": round(t - m.start, 1), "image": fname})
         data = {
             "played_at": when.isoformat(timespec="seconds"),
             "source": source,
@@ -57,6 +69,7 @@ class Store:
             "objective": m.objective,
             "checkpoints": m.checkpoints,
             "killed_by": killed_by,
+            "map_shots": map_shots,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

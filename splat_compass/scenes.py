@@ -131,6 +131,13 @@ def build(store, video_dir, last=None):
                 f'<button onclick="{html.escape(f"play({json.dumps(src)}, {a:.1f}, {b:.1f}, {json.dumps(label, ensure_ascii=False)})", quote=True)}">再生</button>'
                 f'<span class="time">{_mmss(a - m["video_start"])}</span>'
                 f'<span class="kind">{html.escape(kind)}</span><span>{html.escape(desc)}</span></div>')
+        shots = m.get("map_shots") or []
+        if shots:
+            imgs = "".join(
+                f'<a href="{pathlib.Path(os.path.join(store.root, "maps", x["image"])).resolve().as_uri()}" target="_blank">'
+                f'<img src="{pathlib.Path(os.path.join(store.root, "maps", x["image"])).resolve().as_uri()}" '
+                f'title="{_mmss(x["rel"])}" height="72" style="margin:2px"></a>' for x in shots)
+            rows.append(f'<div class="maps">マップ画面: {imgs}</div>')
         total += len(rows)
         res = m.get("result") or ""
         sections.append(
