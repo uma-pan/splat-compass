@@ -108,8 +108,13 @@ document.querySelectorAll(".filters input").forEach(cb => cb.addEventListener("c
 """
 
 
-def scene_sections(store, video_dir, last=None):
-    """場面の一覧の部品: (試合ごとの HTML の並び, 種類の並び, 場面の数)。"""
+def file_link(path):
+    return pathlib.Path(path).resolve().as_uri()
+
+
+def scene_sections(store, video_dir, last=None, link=file_link):
+    """場面の一覧の部品: (試合ごとの HTML の並び, 種類の並び, 場面の数)。
+    link: ファイルの場所から、ページに書く URL を作る関数（アプリの画面では http の URL にする）。"""
     model = winprob.load_model(store)
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
     ms = [m for m in ms if os.path.exists(os.path.join(video_dir, m["source"]))]
@@ -121,7 +126,7 @@ def scene_sections(store, video_dir, last=None):
         sc = find_scenes(m, model)
         if not sc:
             continue
-        src = pathlib.Path(os.path.join(video_dir, m["source"])).resolve().as_uri()
+        src = link(os.path.join(video_dir, m["source"]))
         rows = []
         for a, b, kind, desc in sc:
             if kind not in kinds:
@@ -135,8 +140,8 @@ def scene_sections(store, video_dir, last=None):
         shots = m.get("map_shots") or []
         if shots:
             imgs = "".join(
-                f'<a href="{pathlib.Path(os.path.join(store.root, "maps", x["image"])).resolve().as_uri()}" target="_blank">'
-                f'<img src="{pathlib.Path(os.path.join(store.root, "maps", x["image"])).resolve().as_uri()}" '
+                f'<a href="{link(os.path.join(store.root, "maps", x["image"]))}" target="_blank">'
+                f'<img src="{link(os.path.join(store.root, "maps", x["image"]))}" '
                 f'title="{_mmss(x["rel"])}" height="72" style="margin:2px"></a>' for x in shots)
             rows.append(f'<div class="maps">マップ画面: {imgs}</div>')
         total += len(rows)

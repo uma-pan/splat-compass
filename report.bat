@@ -1,6 +1,7 @@
 @echo off
-rem Build the summary page and open it in the browser
+rem Open the app without reading the camera (summary only)
 cd /d "%~dp0"
 git pull --ff-only
-python -m splat_compass.report
+python -m pip install -q -r requirements.txt
+python -m splat_compass.app
 if errorlevel 1 pause

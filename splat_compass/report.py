@@ -383,7 +383,7 @@ section h2 {{ font-size:14px; margin:0 0 6px; }}
 .maps {{ font-size:12px; color:var(--muted); padding-top:4px; }}
 ul.fb {{ list-style:none; padding:0; margin:0; font-size:13px; }} ul.fb li {{ padding:4px 0; border-top:1px solid #eee; }}
 .tag {{ color:#fff; font-size:11px; border-radius:4px; padding:1px 6px; margin-right:8px; }}
-</style></head><body>
+</style>{head}</head><body>
 <header><h1>splat-compass</h1><span>{subtitle}</span></header>
 <nav>{tabs}</nav>
 <main>{bodies}</main>
@@ -407,13 +407,15 @@ if (v) v.addEventListener("timeupdate", () => {{ if (stopAt !== null && v.curren
 document.querySelectorAll(".filters input").forEach(cb => cb.addEventListener("change", () => {{
   document.querySelectorAll(".scene[data-kind='" + cb.value + "']").forEach(el => el.style.display = cb.checked ? "" : "none");
 }}));
-</script></body></html>"""
+</script>{script}</body></html>"""
 
 
-def build(store, video_dir=None):
+def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="", script=""):
+    """まとめのページの HTML。first_tabs: 先頭に足すタブ [(キー, 名前, HTML)]（アプリの「試合中」など）。"""
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
     ms.sort(key=lambda m: m.get("played_at", ""))
-    tabs = [("overview", "概要", lambda: section_overview(ms)),
+    tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
+    tabs += [("overview", "概要", lambda: section_overview(ms)),
             ("feedback", "試合ごとの振り返り", lambda: section_feedback(store)),
             ("rules", "ルール別・打開", lambda: section_rules(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
@@ -421,7 +423,7 @@ def build(store, video_dir=None):
             ("model", "勝率モデル", lambda: section_model(store, ms))]
     if video_dir and os.path.isdir(video_dir):
         def sc():
-            secs, kinds, total = scenes.scene_sections(store, video_dir, last=60)
+            secs, kinds, total = scenes.scene_sections(store, video_dir, last=60, link=link)
             return ('<div id="player"><video id="v" controls preload="none"></video>'
                     '<div id="now">場面の「再生」を押すと、ここで再生します</div></div>'
                     f'<div class="filters">{scenes.filters_html(kinds)}</div>'
@@ -436,9 +438,15 @@ def build(store, video_dir=None):
             body = f'<p class="muted">この集計を作れませんでした: {ESC(str(e))}</p>'
         bodies += f'<div class="tab{" on" if i == 0 else ""}" id="{k}">{body}</div>'
     sub = f"{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点"
+    return PAGE.format(subtitle=ESC(sub), tabs=nav, bodies=bodies, head=head, script=script)
+
+
+def build(store, video_dir=None):
+    """まとめのページを report.html に書き出す（ブラウザで直接開く用）。"""
     path = os.path.join(store.root, "report.html")
+    page = render(store, video_dir)
     with open(path, "w", encoding="utf-8") as f:
-        f.write(PAGE.format(subtitle=ESC(sub), tabs=nav, bodies=bodies))
+        f.write(page)
     return path
 
 

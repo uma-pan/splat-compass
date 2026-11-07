@@ -89,6 +89,18 @@ def status_text(tr, t):
             f"自分 {me}{hold}")
 
 
+def status_dict(tr, t):
+    """画面（アプリ）向けの今の状態。"""
+    if not tr.in_match:
+        return {"in_match": False}
+    m = tr.match
+    d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1),
+         "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
+         "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
+         "counts": m.timeline[-1][1:3] if m.timeline else None}
+    return d
+
+
 def beep():
     try:
         import winsound
@@ -111,6 +123,7 @@ def worker(frames, store, source, out_q, stop):
             try:  # まとめのページも作り直しておく
                 from . import report
                 report.build(store, store.load_config().get("video_dir"))
+                out_q.put(("report", None))
             except Exception as e:
                 out_q.put(("log", f"まとめのページを作れませんでした: {e}"))
         threading.Thread(target=run, daemon=True).start()
@@ -155,6 +168,7 @@ def worker(frames, store, source, out_q, stop):
                 out_q.put(("wp_reset", None))
         if time.time() - last_status > 0.3:
             out_q.put(("status", status_text(tr, t)))
+            out_q.put(("state", status_dict(tr, t)))
             last_status = time.time()
         if start is not None and t - last_wp >= 1.0:
             last_wp = t
