@@ -169,8 +169,11 @@ def battles(store, lobbies=LOBBIES):
         if not fn.endswith(".csv"):
             continue
         with open(os.path.join(cdir, fn), encoding="utf-8", newline="") as f:
+            # 1行目の見出しも「# 」で始まっている。見出しは使い、ほかの「#」の行は読み飛ばす
+            first = f.readline()
+            header = next(csv.reader([first.lstrip("#").strip()]))
             lines = (ln for ln in f if not ln.startswith("#"))
-            for row in csv.DictReader(lines):
+            for row in csv.DictReader(lines, fieldnames=header):
                 mode = MODES.get(row.get("mode"))
                 if mode is None or row.get("lobby") not in lobbies or row.get("win") not in ("alpha", "bravo"):
                     continue
