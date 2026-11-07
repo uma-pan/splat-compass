@@ -45,20 +45,24 @@ def _states_at(m):
     return at
 
 
+def features(elapsed, l, r, lf, rf, slots):
+    """1時点の特徴量。slots は8枠の状態（0=倒されている 1=生きている 2=スペシャルあり、左4つが味方）。"""
+    el = min(elapsed / MATCH_LEN, 1.2)
+    ally = sum(x > 0 for x in slots[:4])
+    enemy = sum(x > 0 for x in slots[4:])
+    ctl = 1 if lf and not rf else (-1 if rf and not lf else 0)
+    diff = (r - l) / 100  # カウントは少ないほど有利。正なら味方がリード
+    return [el, diff, diff * el, l / 100, r / 100, ctl, ctl * el, (ally - enemy) / 4,
+            ally / 4, enemy / 4, sum(x == 2 for x in slots[:4]) / 4, sum(x == 2 for x in slots[4:]) / 4]
+
+
 def rows(m):
     """1試合を (時刻, 特徴量) の並びにする。"""
     at = _states_at(m)
     out = []
     for t, l, r, lf, rf in m.get("timeline") or []:
-        el = min((t - m["video_start"]) / MATCH_LEN, 1.2)
         st = at(t)
-        ally = sum(st[s] > 0 for s in SLOTS[:4])
-        enemy = sum(st[s] > 0 for s in SLOTS[4:])
-        ctl = 1 if lf and not rf else (-1 if rf and not lf else 0)
-        diff = (r - l) / 100  # カウントは少ないほど有利。正なら味方がリード
-        out.append((t, [el, diff, diff * el, l / 100, r / 100, ctl, ctl * el, (ally - enemy) / 4,
-                        ally / 4, enemy / 4, sum(st[s] == 2 for s in SLOTS[:4]) / 4,
-                        sum(st[s] == 2 for s in SLOTS[4:]) / 4]))
+        out.append((t, features(t - m["video_start"], l, r, lf, rf, [st[s] for s in SLOTS])))
     return out
 
 
@@ -96,8 +100,9 @@ def _dataset(matches, cols=None):
     return np.array(X), np.array(y), np.array(g), np.array(ts)
 
 
-def oof_predict(matches, cols=None, k=5, seed=0):
-    """試合ごとに k 分割した交差検証で、全部の秒の OOF 予測を作る。試合ごとの重みは秒数によらず同じにする。"""
+def oof_predict(matches, cols=None, k=5, seed=0, match_w=None):
+    """試合ごとに k 分割した交差検証で、全部の秒の OOF 予測を作る。
+    1試合の重みは秒数によらず同じ（match_w を渡せば試合ごとに変えられる）。"""
     X, y, g, ts = _dataset(matches, cols)
     rng = np.random.default_rng(seed)
     order = rng.permutation(len(matches))
@@ -105,6 +110,8 @@ def oof_predict(matches, cols=None, k=5, seed=0):
     fold[order] = np.arange(len(matches)) % k
     n_per = np.bincount(g, minlength=len(matches))
     w = 1.0 / n_per[g]
+    if match_w is not None:
+        w = w * np.asarray(match_w)[g]
     p = np.zeros(len(y))
     for f in range(k):
         tr, te = fold[g] != f, fold[g] == f
@@ -187,11 +194,26 @@ def report(matches):
     return full
 
 
-def save_model(model, store):
+def load_model(store):
+    path = os.path.join(store.root, "winprob_area.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    m = Logistic()
+    m.mu, m.sd, m.b = np.array(d["mu"]), np.array(d["sd"]), np.array(d["b"])
+    m.trained_on = set(d.get("trained_on", []))
+    m.oof_logloss = d.get("oof_logloss")
+    return m
+
+
+def save_model(model, store, trained_on=(), oof_logloss=None):
     path = os.path.join(store.root, "winprob_area.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump({"features": FEATURES, "mu": model.mu.tolist(), "sd": model.sd.tolist(),
-                   "b": model.b.tolist()}, f, ensure_ascii=False, indent=1)
+                   "b": model.b.tolist(), "trained_on": sorted(trained_on), "oof_logloss": oof_logloss},
+                  f, ensure_ascii=False, indent=1)
     return path
 
 

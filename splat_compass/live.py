@@ -13,10 +13,13 @@ import queue
 import threading
 import time
 
+import numpy as np
+
 from .hud import DEAD, SPECIAL
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
 from .tracker import KIND_LABEL, Tracker
+from . import learning, winprob
 
 FPS = 5
 
@@ -44,7 +47,19 @@ class Notices:
         return sorted(new)
 
 
-def status_text(tr, t):
+def win_prob(tr, t, model):
+    """ガチエリアの試合中なら、今の勝率（0〜1）。出せなければ None。"""
+    m = tr.match
+    if model is None or m is None or m.rule != "ガチエリア" or not m.timeline or tr.cur is None:
+        return None
+    last = m.timeline[-1]
+    if t - last[0] > 2.5:
+        return None
+    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur)
+    return float(model.predict(np.array([f]))[0])
+
+
+def status_text(tr, t, wp=None):
     c = tr.counts()
     if not tr.in_match:
         return "試合を待っています"
@@ -58,7 +73,8 @@ def status_text(tr, t):
     rule = tr.match.rule or ""
     ally, enemy = c["alive"]
     tag = "（不利）" if ally < enemy else ("（有利）" if ally > enemy else "")
-    return (f"{rule}  {int(t - tr.match.start)}秒\n"
+    wp_txt = f"  勝率 {wp * 100:.0f}%" if wp is not None else ""
+    return (f"{rule}  {int(t - tr.match.start)}秒{wp_txt}\n"
             f"人数 {ally} 対 {enemy}{tag}\n"
             f"スペシャル準備 味方{c['specials'][0]} 敵{c['specials'][1]}\n"
             f"自分 {me}{hold}")
@@ -75,6 +91,13 @@ def beep():
 def worker(frames, store, source, out_q, stop):
     """映像を読み続け、表示したいものを out_q に流す。"""
     notices = Notices()
+    model = {"m": winprob.load_model(store)}
+
+    def retrain_bg():
+        def run():
+            learning.retrain(store, log=lambda s: out_q.put(("log", s)))
+            model["m"] = winprob.load_model(store)
+        threading.Thread(target=run, daemon=True).start()
 
     def on_event(m, e):
         if e.slot == m.me_slot or e.kind in ("dead", "dead_with_special"):
@@ -88,6 +111,10 @@ def worker(frames, store, source, out_q, stop):
         res = m.result or "勝敗不明（中断扱い）"
         out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {res} → 保存しました"))
         out_q.put(("saved", p))
+        if m.rule == "ガチエリア" and model["m"] is not None:
+            for rel, what, d in learning.swings(model["m"], store.load(p)):
+                out_q.put(("log", f"  勝率が大きく動いた場面: {int(rel) // 60}:{int(rel) % 60:02d} {what}（{d * 100:+.0f}%）"))
+        retrain_bg()
 
     began = time.time()
     tr = Tracker(FPS, on_event=on_event, on_match_end=on_end)
@@ -99,7 +126,7 @@ def worker(frames, store, source, out_q, stop):
         for n in notices.check(tr, t):
             out_q.put(("notice", n))
         if time.time() - last_status > 0.3:
-            out_q.put(("status", status_text(tr, t)))
+            out_q.put(("status", status_text(tr, t, win_prob(tr, t, model["m"]))))
             last_status = time.time()
     tr.flush()
     out_q.put(("log", "映像が終わりました"))

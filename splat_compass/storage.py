@@ -52,8 +52,16 @@ class Store:
         out = []
         for p in sorted(glob.glob(os.path.join(self.mdir, "*.json"))):
             with open(p, encoding="utf-8") as f:
-                out.append(json.load(f))
+                d = json.load(f)
+            d["_file"] = os.path.basename(p)
+            out.append(d)
         return out
+
+    def load(self, path):
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+        d["_file"] = os.path.basename(path)
+        return d
 
     def reset_videos(self):
         """録画から作った記録を matches/_old/日時/ に移し、処理済み一覧を空にする（消しはしない）。"""

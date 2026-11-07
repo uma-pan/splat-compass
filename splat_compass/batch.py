@@ -14,6 +14,7 @@ import time
 from .sources import video_frames
 from .storage import Store
 from .tracker import Tracker
+from . import learning
 
 FPS = 5
 
@@ -66,6 +67,8 @@ def run(folder, store, watch=False, redo=False):
             process(p, store)
             store.mark_processed(os.path.basename(p))
             print(f"  完了（{time.time() - t0:.0f}秒）")
+        if todo:
+            learning.retrain(store)
         if not watch:
             break
         time.sleep(30)
