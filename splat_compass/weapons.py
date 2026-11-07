@@ -2,7 +2,7 @@
 
 しくみ:
   1. 試合ごとに8人のアイコンを切り出して weapons/<試合>.png に残す
-  2. 似た絵をまとめて、まとまりごとに一度だけ名前を付けてもらう（weapon_labels.json）
+  2. 似た絵を並べて見せ、同じブキの絵に一度だけ名前を付けてもらう（weapon_labels.json）
   3. あとは名前の付いた絵と見比べて、一番似ているものの名前を使う
 
   python -m splat_compass.weapons --extract "D:\\Spla Capture"   … 前の録画からアイコンを切り出す
@@ -23,8 +23,8 @@ from .hud import ALIVE, SLOT_NAMES, crop_icon, read_slots
 from .storage import Store
 
 W, H = 80, 84             # アイコン1枚の大きさ
-SAME = 0.75               # まとめるときの似ている度合い
-AUTO = 0.80               # 名前の付いた絵とこれ以上似ていれば、同じブキとみなす
+PICK = 0.75               # 名前を付ける画面で、これ以上似た絵をたどってつながったものを最初から選んでおく
+AUTO = 0.75               # 名前の付いた絵とこれ以上似ていれば、同じブキとみなす
 HINT = 0.65               # 名前の候補として出す下限
 UNKNOWN = "?"             # 「わからない」と答えた絵
 
@@ -66,16 +66,37 @@ def load_strip(store, m):
     return out
 
 
-def feature(icon):
-    """絵の輪郭（明るさ・色の変わり目）を少しぼかしたもの。背景のイカ・タコの色に左右されにくい。"""
-    r = icon[18:72, 10:70].astype(np.float32)
+def _edges(icon):
+    """絵の輪郭（明るさ・色の変わり目）を少しぼかしたもの。"""
+    r = icon[18:72, 6:74].astype(np.float32)
     gx = cv2.Sobel(r, cv2.CV_32F, 1, 0)
     gy = cv2.Sobel(r, cv2.CV_32F, 0, 1)
     m = np.minimum(np.sqrt(gx ** 2 + gy ** 2).max(2), 300)
     m = cv2.GaussianBlur(m, (7, 7), 0)
-    v = cv2.resize(m, (30, 27)).flatten()
+    v = cv2.resize(m, (30, 27), interpolation=cv2.INTER_AREA).flatten()
     v -= v.mean()
     return v / (np.linalg.norm(v) + 1e-6)
+
+
+def _colors(icon):
+    """ブキの部分の色。背景（イカ・タコの形のチームの色）に近いところは消してから見る。
+    輪郭だけでは見分けにくい、形の似たブキ（R-PEN とリッター、ローラーの仲間など）を分けるため。"""
+    r = cv2.cvtColor(np.ascontiguousarray(icon[18:72, 6:74]), cv2.COLOR_RGB2LAB).astype(np.float32)
+    fill = np.median(r.reshape(-1, 3), 0)
+    w = np.clip((np.linalg.norm(r - fill, axis=2) - 25) / 25, 0, 1)[..., None]
+    gray = np.array([128, 128, 128], np.float32)
+    x = r * w + gray * (1 - w)
+    x = cv2.resize(cv2.GaussianBlur(x, (3, 3), 0), (34, 27), interpolation=cv2.INTER_AREA)
+    x = (x - gray).flatten()
+    return x / (np.linalg.norm(x) + 1e-6)
+
+
+COLOR_WEIGHT = 2.0
+
+
+def feature(icon):
+    v = np.concatenate([_edges(icon), COLOR_WEIGHT * _colors(icon)])
+    return v / np.linalg.norm(v)
 
 
 # ---------- 名前 ----------
@@ -119,7 +140,7 @@ class Namer:
         items = items if items is not None else all_icons(store)
         named = [(feature(ic), self.labels[key]) for key, ic, _, _ in items
                  if self.labels.get(key) not in (None, "", UNKNOWN)]
-        self.F = np.array([f for f, _ in named]) if named else np.zeros((0, 810), np.float32)
+        self.F = np.array([f for f, _ in named]) if named else None
         self.names = [n for _, n in named]
 
     def nearest(self, f):
@@ -188,35 +209,7 @@ def extract_past(store, video_dir, redo=False):
     return n
 
 
-# ---------- まとめる ----------
-def group(F, th=SAME):
-    """似た絵をまとめる。[[番号...]]（大きい順）"""
-    cents, mem = [], []
-    for i, f in enumerate(F):
-        if cents:
-            s = np.array(cents) @ f
-            j = int(s.argmax())
-            if s[j] > th:
-                mem[j].append(i)
-                c = F[mem[j]].mean(0)
-                cents[j] = c / np.linalg.norm(c)
-                continue
-        cents.append(f)
-        mem.append([i])
-    while len(cents) > 1:
-        C = np.array(cents)
-        S = C @ C.T
-        np.fill_diagonal(S, -1)
-        a, b = np.unravel_index(S.argmax(), S.shape)
-        if S[a, b] <= th:
-            break
-        mem[a] += mem[b]
-        c = F[mem[a]].mean(0)
-        cents[a] = c / np.linalg.norm(c)
-        del mem[b], cents[b]
-    return sorted(mem, key=len, reverse=True)
-
-
+# ---------- 名前を付ける ----------
 def killcam_names(store, m, labels=None, protos=None):
     """その試合で自分を倒したメインのブキの名前。"""
     out = set()
@@ -239,15 +232,14 @@ def _side(m, k):
 
 
 def suggest(store, members, items, namer, kc_cache):
-    """まとまりの名前の候補。似た名前付きの絵 → 倒された画面との重なり の順に探す。"""
+    """選んだ絵の名前の候補。似た名前付きの絵 → 倒された画面との重なり の順に探す。"""
     votes = Counter()
     for i in members:
         n, s = namer.nearest(feature(items[i][1]))
         if n and s >= HINT:
             votes[n] += 1
     if votes:
-        return votes.most_common(1)[0][0], "似た絵"
-    # 相手側にいた試合で、自分を倒したブキの名前
+        return votes.most_common(1)[0][0], "似た絵に付けた名前"
     co, seen = Counter(), 0
     for i in members:
         _, _, m, k = items[i]
@@ -262,49 +254,82 @@ def suggest(store, members, items, namer, kc_cache):
     return "", ""
 
 
-def queue(store):
-    """名前を付けてほしいまとまり。[(番号のリスト, 候補, 理由)] と items"""
-    items = all_icons(store)
-    labels = load_labels(store)
-    namer = Namer(store, items, labels)
-    todo = [i for i, (key, ic, _, _) in enumerate(items)
-            if not labels.get(key) and namer.nearest(feature(ic))[1] < AUTO]
-    if not todo:
-        return [], items
-    F = np.array([feature(items[i][1]) for i in todo])
-    kl, kp = killcam.load_labels(store)
-    cache = {}
+def chains(S, th):
+    """似ている度合いが th 以上の絵どうしを、つながりでまとめる。[[番号...]]
+    （同じブキでも映り方で似方がばらつくので、近い絵をたどってつなげる）"""
+    n = len(S)
+    par = list(range(n))
 
-    def kc(m):
-        if m["_file"] not in cache:
-            cache[m["_file"]] = killcam_names(store, m, kl, kp)
-        return cache[m["_file"]]
-
-    out = []
-    for g in group(F):
-        c = F[g].mean(0)
-        g = sorted(g, key=lambda j: -float(F[j] @ c))  # 似ていない絵ほど後ろに並ぶ（外しやすいように）
-        members = [todo[j] for j in g]
-        name, why = suggest(store, members, items, namer, kc)
-        out.append((members, name, why))
-    return out, items
+    def root(x):
+        while par[x] != x:
+            par[x] = par[par[x]]
+            x = par[x]
+        return x
+    a, b = np.where(np.triu(S >= th, 1))
+    for i, j in zip(a, b):
+        par[root(i)] = root(j)
+    out = defaultdict(list)
+    for i in range(n):
+        out[root(i)].append(i)
+    return list(out.values())
 
 
-# ---------- 名前を付ける画面 ----------
+class Pool:
+    """名前付けに使う、全部の絵と名前。"""
+
+    def __init__(self, store):
+        self.store = store
+        self.items = all_icons(store)
+        self.labels = load_labels(store)
+        self.F = np.array([feature(it[1]) for it in self.items]) if self.items else np.zeros((0, 1))
+        kl, kp = killcam.load_labels(store)
+        self._kc, self._kl, self._kp = {}, kl, kp
+
+    def kc(self, m):
+        if m["_file"] not in self._kc:
+            self._kc[m["_file"]] = killcam_names(self.store, m, self._kl, self._kp)
+        return self._kc[m["_file"]]
+
+    def name(self, i):
+        return self.labels.get(self.items[i][0])
+
+    def named(self):
+        return [i for i in range(len(self.items)) if self.name(i) not in (None, "", UNKNOWN)]
+
+    def unnamed(self):
+        """名前が無く、名前の付いた絵とも十分には似ていない絵。"""
+        todo = [i for i in range(len(self.items)) if not self.name(i)]
+        nm = self.named()
+        if todo and nm:
+            best = (self.F[todo] @ self.F[nm].T).max(1)
+            todo = [i for i, b in zip(todo, best) if b < AUTO]
+        return todo
+
+    def namer(self):
+        n = Namer.__new__(Namer)
+        nm = self.named()
+        n.labels = self.labels
+        n.F = self.F[nm] if nm else None
+        n.names = [self.name(i) for i in nm]
+        return n
+
+    def save(self):
+        save_labels(self.store, self.labels)
+
+
 def label_gui(store):
     import tkinter as tk
     from tkinter import ttk
 
-    print("アイコンをまとめています…")
-    groups, items = queue(store)
-    print(f"{len(groups)}まとまりあります。名前を付ける画面を開きます（タスクバーも見てください）")
-    if not groups:
-        print("名前の分からないアイコンはありません")
+    print("アイコンを読み込んでいます…")
+    pool = Pool(store)
+    if not pool.items:
+        print("アイコンの記録がありません。--extract で前の録画から切り出せます")
         return
-    labels = load_labels(store)
-    known = set(n for n in labels.values() if n and n != UNKNOWN)
-    kl, _ = killcam.load_labels(store)
-    known |= {n for n in kl.values() if n and killcam.kind_of(n) == "メイン"}
+    print(f"{len(pool.items)}枚。名前を付ける画面を開きます（タスクバーも見てください）")
+    known = {n for n in pool.labels.values() if n and n != UNKNOWN}
+    known |= {n for n in pool._kl.values() if n and killcam.kind_of(n) == "メイン"}
+    MAXSHOW, COLS = 60, 12
 
     def photo(icon, dim=False):
         im = icon.astype(np.float32)
@@ -315,10 +340,12 @@ def label_gui(store):
 
     root = tk.Tk()
     root.title("ブキの名前を付ける")
-    root.geometry("1060x720")
+    root.geometry("1080x760")
+    modes = tk.Frame(root)
+    modes.pack(fill="x", padx=10, pady=(8, 0))
     top = tk.Label(root, font=("Meiryo", 12), anchor="w", justify="left")
-    top.pack(fill="x", padx=10, pady=(10, 0))
-    hint = tk.Label(root, font=("Meiryo", 10), fg="#666", anchor="w", justify="left")
+    top.pack(fill="x", padx=10, pady=(6, 0))
+    hint = tk.Label(root, font=("Meiryo", 10), fg="#555", anchor="w", justify="left")
     hint.pack(fill="x", padx=10)
     grid = tk.Frame(root)
     grid.pack(fill="both", expand=True, padx=10, pady=6)
@@ -326,73 +353,147 @@ def label_gui(store):
     bottom.pack(fill="x", padx=10, pady=10)
     tk.Label(bottom, text="ブキの名前:", font=("Meiryo", 12)).pack(side="left")
     name_var = tk.StringVar()
-    box = ttk.Combobox(bottom, textvariable=name_var, values=sorted(known), font=("Meiryo", 12), width=28)
+    box = ttk.Combobox(bottom, textvariable=name_var, values=sorted(known), font=("Meiryo", 12), width=26)
     box.pack(side="left", padx=6)
+    buttons = tk.Frame(bottom)
+    buttons.pack(side="left", fill="x", expand=True)
 
-    state = {"i": 0, "out": set(), "imgs": [], "cells": []}
-    MAXSHOW = 60
+    st = {"mode": "new", "shown": [], "sel": set(), "imgs": [], "skip": set(), "fix_name": None}
 
-    def show():
+    def draw(indices, selected):
+        """絵を並べる。押すと選ぶ／外すが切り替わる。選んでいない絵は暗く出す。"""
         for w in grid.winfo_children():
             w.destroy()
-        state["out"], state["imgs"], state["cells"] = set(), [], []
-        if state["i"] >= len(groups):
-            top.config(text="おわりです。ありがとうございました。")
-            hint.config(text="")
-            root.after(1200, root.destroy)
-            return
-        members, name, why = groups[state["i"]]
-        sides = Counter(_side(items[j][2], items[j][3]) for j in members)
-        top.config(text=f"このブキの名前を入れてください（{state['i'] + 1} / {len(groups)} まとまり、{len(members)}枚）"
-                        + ("　※自分が使った試合あり" if sides.get("me") else ""))
-        hint.config(text=("違うブキが混ざっていたら、その絵を押して外してください。"
-                          + (f"\n候補「{name}」: {why}" if name else "")
-                          + (f"\n表示しきれない {len(members) - MAXSHOW}枚も同じ名前になります" if len(members) > MAXSHOW else "")))
-        for n, j in enumerate(members[:MAXSHOW]):
-            a, b = photo(items[j][1]), photo(items[j][1], True)
-            state["imgs"] += [a, b]
-            lb = tk.Label(grid, image=a, bd=2, relief="flat", cursor="hand2")
-            lb.grid(row=n // 12, column=n % 12, padx=2, pady=2)
+        st["shown"], st["sel"], st["imgs"] = indices, set(selected), []
+        for n, j in enumerate(indices):
+            a, b = photo(pool.items[j][1]), photo(pool.items[j][1], True)
+            st["imgs"] += [a, b]
+            lb = tk.Label(grid, image=a if j in st["sel"] else b, bd=0, cursor="hand2")
+            lb.grid(row=n // COLS, column=n % COLS, padx=2, pady=2)
 
             def toggle(_e, j=j, lb=lb, a=a, b=b):
-                if j in state["out"]:
-                    state["out"].discard(j)
-                    lb.config(image=a)
-                else:
-                    state["out"].add(j)
+                if j in st["sel"]:
+                    st["sel"].discard(j)
                     lb.config(image=b)
+                else:
+                    st["sel"].add(j)
+                    lb.config(image=a)
+                count()
             lb.bind("<Button-1>", toggle)
+        count()
+
+    def count():
+        if st["mode"] == "new":
+            hint.config(text=f"明るい絵（{len(st['sel'])}枚）に名前を付けます。違うブキは押して暗くし、"
+                             "同じブキなのに暗い絵は押して明るくしてください。" + st.get("why", ""))
+        else:
+            hint.config(text=f"押した絵（{len(st['sel'])}枚）は名前を消すか、下の名前に付け直します。"
+                             "似ていない絵ほど前に並んでいます。")
+
+    # ---- 名前を付ける ----
+    def next_new():
+        st["mode"] = "new"
+        todo = [i for i in pool.unnamed() if pool.items[i][0] not in st["skip"]]
+        if not todo:
+            top.config(text="名前の無い絵はもうありません。")
+            draw([], [])
+            return
+        F = pool.F[todo]
+        S = F @ F.T
+        comp = chains(S, PICK)
+        big = max(comp, key=len)  # 似た絵のつながりが一番大きいものから聞く
+        seed = max(big, key=lambda k: float(S[k, big].sum()))
+        members = set(big)
+        order = sorted(big, key=lambda k: -S[seed, k])[:MAXSHOW]
+        rest = [k for k in np.argsort(-S[seed]) if k not in members][:MAXSHOW - len(order)]
+        idx = [todo[k] for k in order + rest]
+        sel = [todo[k] for k in order]
+        nm = pool.namer()
+        name, why = suggest(store, sel, pool.items, nm, pool.kc)
+        st["why"] = f"\n候補「{name}」: {why}" if name else ""
+        mine = any(_side(pool.items[j][2], pool.items[j][3]) == "me" for j in sel)
+        top.config(text=f"このブキの名前を入れてください（名前の無い絵 残り{len(todo)}枚）"
+                        + ("　※自分が使った試合あり" if mine else ""))
+        draw(idx, sel)
         name_var.set(name)
         box.focus_set()
         box.icursor("end")
 
-    def finish_group(value):
-        members = groups[state["i"]][0]
-        out = [j for j in members if j in state["out"]]
-        if value is not None:
-            for j in members:
-                if j not in state["out"]:
-                    labels[items[j][0]] = value
-            save_labels(store, labels)
-            if value != UNKNOWN:
-                known.add(value)
-                box.config(values=sorted(known))
-        if out:  # 外した絵は、あとでもう一度出す
-            groups.append((out, "", ""))
-        state["i"] += 1
-        show()
+    def put(value):
+        for j in st["sel"]:
+            pool.labels[pool.items[j][0]] = value
+        pool.save()
+        if value != UNKNOWN:
+            known.add(value)
+            box.config(values=sorted(known))
 
     def ok(_e=None):
         v = name_var.get().strip()
-        if v:
-            finish_group(v)
+        if st["mode"] == "new":
+            if v and st["sel"]:
+                put(v)
+            next_new()
+        elif v and st["sel"]:
+            put(v)
+            show_fix(st["fix_name"])
 
-    tk.Button(bottom, text="決定 (Enter)", font=("Meiryo", 11), command=ok).pack(side="left", padx=4)
-    tk.Button(bottom, text="わからない", font=("Meiryo", 11), command=lambda: finish_group(UNKNOWN)).pack(side="left", padx=4)
-    tk.Button(bottom, text="あとで", font=("Meiryo", 11), command=lambda: finish_group(None)).pack(side="left", padx=4)
-    tk.Button(bottom, text="終わる", font=("Meiryo", 11), command=root.destroy).pack(side="right")
+    def unknown():
+        if st["mode"] == "new" and st["sel"]:
+            put(UNKNOWN)
+            next_new()
+
+    def later():
+        if st["mode"] == "new":
+            st["skip"].update(pool.items[j][0] for j in (st["sel"] or set(st["shown"][:1])))
+            next_new()
+
+    # ---- 付けた名前を見直す ----
+    fix_var = tk.StringVar()
+    fix_box = ttk.Combobox(modes, textvariable=fix_var, state="readonly", font=("Meiryo", 11), width=30)
+
+    def names_with_count():
+        c = Counter(n for n in pool.labels.values() if n)
+        return [f"{n}（{k}枚）" for n, k in sorted(c.items(), key=lambda x: -x[1])]
+
+    def start_fix():
+        st["mode"] = "fix"
+        fix_box.config(values=names_with_count())
+        if fix_box["values"]:
+            fix_box.current(0)
+            show_fix(fix_box.get().rsplit("（", 1)[0])
+
+    def show_fix(name):
+        st["mode"], st["fix_name"] = "fix", name
+        idx = [i for i in range(len(pool.items)) if pool.name(i) == name]
+        if not idx:
+            top.config(text=f"「{name}」の絵はもうありません。")
+            draw([], [])
+            return
+        c = pool.F[idx].mean(0)
+        idx.sort(key=lambda i: float(pool.F[i] @ c))  # 似ていない絵ほど前
+        top.config(text=f"「{name}」と名前を付けた絵（{len(idx)}枚）。違うブキの絵を押して選んでください。")
+        draw(idx[:MAXSHOW], [])
+        name_var.set("")
+
+    def erase():
+        if st["mode"] == "fix" and st["sel"]:
+            for j in st["sel"]:
+                pool.labels.pop(pool.items[j][0], None)
+            pool.save()
+            show_fix(st["fix_name"])
+
+    fix_box.bind("<<ComboboxSelected>>", lambda _e: show_fix(fix_var.get().rsplit("（", 1)[0]))
+    tk.Button(modes, text="名前を付ける", font=("Meiryo", 10), command=next_new).pack(side="left")
+    tk.Button(modes, text="付けた名前を見直す", font=("Meiryo", 10), command=start_fix).pack(side="left", padx=6)
+    fix_box.pack(side="left")
+
+    tk.Button(buttons, text="決定 (Enter)", font=("Meiryo", 11), command=ok).pack(side="left", padx=4)
+    tk.Button(buttons, text="わからない", font=("Meiryo", 11), command=unknown).pack(side="left", padx=4)
+    tk.Button(buttons, text="あとで", font=("Meiryo", 11), command=later).pack(side="left", padx=4)
+    tk.Button(buttons, text="選んだ絵の名前を消す", font=("Meiryo", 11), command=erase).pack(side="left", padx=4)
+    tk.Button(buttons, text="終わる", font=("Meiryo", 11), command=root.destroy).pack(side="right")
     root.bind("<Return>", ok)
-    show()
+    next_new()
     # ほかの窓の後ろに隠れないよう、開いたときだけ一番手前に出す
     root.lift()
     root.attributes("-topmost", True)
