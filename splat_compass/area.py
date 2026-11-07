@@ -18,7 +18,7 @@ SPECIAL_SYNC = 5.0  # この秒数以内に味方が2人以上スペシャルを
 def _states(timeline):
     """[(時刻, 状態, 味方カウント, 敵カウント)]。状態は "味方" / "敵" / "中立"。数秒のちらつきはならす。"""
     out, cur, pend, n = [], None, None, 0
-    for t, l, r, lf, rf in timeline:
+    for t, l, r, lf, rf, *_ in timeline:
         s = "味方" if lf and not rf else ("敵" if rf and not lf else "中立")
         if cur is None:
             cur = s

@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 
 from .hud import (DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, find_checkpoints, read_counts, read_objective_pos, read_slots)
+                  bar_band, find_checkpoints, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
@@ -59,7 +59,7 @@ class Match:
     gauge_full_frames: int = 0
     me_by_gauge: bool = False
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
-    timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている]
+    timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
@@ -155,7 +155,8 @@ class Tracker:
             self.last_count_t = t
             c = read_counts(img)
             if c is not None:
-                self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3])])
+                pl, pr = read_penalty(img)
+                self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3]), pl, pr])
             rule = self.match.rule
             if rule in ("ガチヤグラ", "ガチホコ", None) and self.match.checkpoints is None:
                 rel = t - self.match.start

@@ -104,6 +104,50 @@ def _read_box(b):
     return (v, filled) if v <= 100 else (None, None)
 
 
+PENALTY_Y = (214, 260)                       # ペナルティ（+〇〇）の行
+PENALTY_BOXES = [(800, 925), (995, 1115)]    # 左（味方）・右（敵）
+
+
+_PEN = None
+
+
+def _pen_protos():
+    global _PEN
+    if _PEN is None:
+        d = np.load(os.path.join(TEMPLATE_DIR, "pen_digits.npz"))
+        _PEN = {k[1:]: d[k] for k in d.files}  # "0"〜"9"、"plus"（+）、"x"（数字でないもの）
+    return _PEN
+
+
+def _read_penalty_box(b):
+    """「+18」のような文字を読む。出ていなければ 0、読めなければ None。
+    文字は白いときと灰色のときがあるので、明るさの境目は切り抜きごとに自動で決める（大津の方法）。"""
+    v = b.max(axis=2).astype(np.uint8)
+    _, fg = cv2.threshold(v, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(fg)
+    protos = _pen_protos()
+    chars = []
+    for i in sorted(range(1, n), key=lambda i: st[i][0]):
+        x, y, w, h, a = st[i]
+        if not (16 <= h <= 40 and a >= 30 and w <= 35 and y > 0 and y + h < fg.shape[0]):
+            continue
+        g = cv2.resize((lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255, (20, 30),
+                       interpolation=cv2.INTER_AREA).flatten().astype(np.float32) / 255
+        chars.append(min(protos, key=lambda k: float(((protos[k] - g) ** 2).sum())))
+    if "plus" not in chars:
+        return 0  # 「+」が無い＝ペナルティは出ていない
+    digits = [c for c in chars[chars.index("plus") + 1:] if c not in ("plus", "x")]
+    if not digits or len(digits) > 2:
+        return None
+    return int("".join(digits))
+
+
+def read_penalty(img):
+    """(味方のペナルティ, 敵のペナルティ)。ガチエリアで確保し返した側に付く、カウントが減り始めるまでの残り。"""
+    y0, y1 = PENALTY_Y
+    return tuple(_read_penalty_box(img[y0:y1, x0:x1]) for x0, x1 in PENALTY_BOXES)
+
+
 def read_counts(img):
     """(味方のカウント, 敵のカウント, 味方の箱が塗られているか, 敵の箱が塗られているか)。
     カウントが出ていない画面やルールでは None。ガチエリアでは、箱が塗られている側がエリアを確保している。"""

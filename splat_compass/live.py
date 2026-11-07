@@ -57,7 +57,8 @@ def win_prob(tr, t, model):
         return None
     evs = [e.row() for e in m.events]
     ctx = winprob.context(m.timeline, evs, t)
-    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx)
+    pen = (last[5], last[6]) if len(last) >= 7 else (0, 0)
+    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx, pen)
     return float(model.predict(np.array([f]))[0])
 
 

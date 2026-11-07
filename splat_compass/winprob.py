@@ -24,6 +24,7 @@ FEATURES = [
     "味方のスペシャル準備", "敵のスペシャル準備",
     "味方カウントの減り（直近15秒）", "敵カウントの減り（直近15秒）", "勢い（敵の減り−味方の減り）",
     "延長戦", "味方のデス（直近10秒）", "敵のデス（直近10秒）",
+    "味方のペナルティ", "敵のペナルティ",
 ]
 MOMENTUM = 15.0  # カウントの勢いを見る秒数
 RECENT = 10.0    # 直近のデスを数える秒数
@@ -69,7 +70,7 @@ def context(timeline, events, t):
     return l_ago, r_ago, ad, ed
 
 
-def features(elapsed, l, r, lf, rf, slots, ctx=(None, None, 0, 0)):
+def features(elapsed, l, r, lf, rf, slots, ctx=(None, None, 0, 0), pen=(0, 0)):
     """1時点の特徴量。slots は8枠の状態（0=倒されている 1=生きている 2=スペシャルあり、左4つが味方）。"""
     el = min(elapsed / MATCH_LEN, 1.2)
     ally = sum(x > 0 for x in slots[:4])
@@ -81,7 +82,8 @@ def features(elapsed, l, r, lf, rf, slots, ctx=(None, None, 0, 0)):
     rd = ((r_ago if r_ago is not None else r) - r) / 100
     return [el, diff, diff * el, l / 100, r / 100, ctl, ctl * el, (ally - enemy) / 4,
             ally / 4, enemy / 4, sum(x == 2 for x in slots[:4]) / 4, sum(x == 2 for x in slots[4:]) / 4,
-            ld, rd, ld - rd, float(elapsed > MATCH_LEN), ad / 4, ed / 4]
+            ld, rd, ld - rd, float(elapsed > MATCH_LEN), ad / 4, ed / 4,
+            (pen[0] or 0) / 100, (pen[1] or 0) / 100]
 
 
 def rows(m):
@@ -90,10 +92,13 @@ def rows(m):
     tl = m.get("timeline") or []
     evs = sorted(m["events"], key=lambda e: e[0])
     out = []
-    for t, l, r, lf, rf in tl:
+    last_pen = [0, 0]
+    for t, l, r, lf, rf, *rest in tl:
         st = at(t)
+        if len(rest) >= 2:  # ペナルティが読めなかった秒は直前の値を使う
+            last_pen = [rest[k] if rest[k] is not None else last_pen[k] for k in (0, 1)]
         out.append((t, features(t - m["video_start"], l, r, lf, rf, [st[s] for s in SLOTS],
-                                context(tl, evs, t))))
+                                context(tl, evs, t), tuple(last_pen))))
     return out
 
 
