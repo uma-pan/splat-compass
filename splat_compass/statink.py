@@ -68,9 +68,16 @@ def download(store, days=30, log=print):
     d = _dir(store)
     log("stat.ink のダウンロードページを読んでいます…")
     html = _get(DOWNLOADS).decode("utf-8", "replace")
+    with open(os.path.join(d, "downloads_page.html"), "w", encoding="utf-8") as f:
+        f.write(html)  # ページの形が変わったときに確かめられるよう残しておく
     links = find_csv_links(html)
     if not links:
-        raise RuntimeError("ダウンロードページに日ごとの CSV が見つかりませんでした（ページの形が変わったかもしれません）")
+        cands = sorted(set(re.findall(r'href="([^"]*(?:csv|zip|battle|splatoon-?3)[^"]*)"', html)))
+        log(f"ダウンロードページにあったそれらしいリンク {len(cands)} 件:")
+        for c in cands[:40]:
+            log("  " + c)
+        raise RuntimeError("ダウンロードページに日ごとの CSV が見つかりませんでした。"
+                           f"ページを {os.path.join(d, 'downloads_page.html')} に保存したので、確かめて直します")
     got = 0
     for day, url in links[:days]:
         path = os.path.join(d, "csv", f"{day}.csv")
