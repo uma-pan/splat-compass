@@ -112,7 +112,7 @@ def aux_target(m):
 class Logistic:
     """numpy だけで書いたロジスティック回帰（L2 正則化つき）。"""
 
-    def __init__(self, l2=1e-2, iters=2000, lr=0.5):
+    def __init__(self, l2=0.2, iters=2000, lr=0.5):  # 試合数が少ないので強めに抑える（OOF で 0.01〜0.2 を比べて決めた）
         self.l2, self.iters, self.lr = l2, iters, lr
 
     def fit(self, X, y, w=None):
@@ -144,14 +144,30 @@ class Ridge:
         return np.c_[np.ones(len(X)), (X - self.mu) / self.sd] @ self.b
 
 
-class WinModel:
-    """勝率モデル。aux=True なら、まず「30秒後のカウント差の動き」を予測し、それも入力に加えて勝率を出す。"""
+KNOTS = (0.1, 0.2, 0.4, 0.7)  # 残りカウント 10・20・40・70 に曲がり目を置く
 
-    def __init__(self, aux=False):
+
+def spline(X):
+    """残りカウントの効き方を折れ線（曲がり目つき）で表すための列を足す。
+    max(0, 曲がり目 − 残り) の形なので、残りが少ない範囲で効き方が変わればその分の重みがつく。"""
+    l, r = X[:, 3], X[:, 4]
+    cols = [np.maximum(0, k - l) for k in KNOTS] + [np.maximum(0, k - r) for k in KNOTS]
+    return np.c_[X, np.stack(cols, axis=1)]
+
+
+class WinModel:
+    """勝率モデル。
+    spline=True なら残りカウントを折れ線で表す列を足す。
+    aux=True なら、まず「30秒後のカウント差の動き」を予測し、それも入力に加えて勝率を出す。"""
+
+    def __init__(self, aux=False, spline=False):
         self.aux = aux
+        self.use_spline = spline
         self.ridge = None
 
     def fit(self, X, y, w, y_aux=None):
+        if self.use_spline:
+            X = spline(X)
         if self.aux:
             self.ridge = Ridge().fit(X, y_aux, w)
             X = np.c_[X, self.ridge.predict(X)]
@@ -159,20 +175,22 @@ class WinModel:
         return self
 
     def predict(self, X):
+        if self.use_spline:
+            X = spline(X)
         if self.aux:
             X = np.c_[X, self.ridge.predict(X)]
         return self.logit.predict(X)
 
     # 保存用
     def to_dict(self):
-        d = {"aux": self.aux, "mu": self.logit.mu.tolist(), "sd": self.logit.sd.tolist(), "b": self.logit.b.tolist()}
+        d = {"aux": self.aux, "spline": self.use_spline, "mu": self.logit.mu.tolist(), "sd": self.logit.sd.tolist(), "b": self.logit.b.tolist()}
         if self.aux:
             d["ridge"] = {"mu": self.ridge.mu.tolist(), "sd": self.ridge.sd.tolist(), "b": self.ridge.b.tolist()}
         return d
 
     @classmethod
     def from_dict(cls, d):
-        m = cls(d.get("aux", False))
+        m = cls(d.get("aux", False), d.get("spline", False))
         m.logit = Logistic()
         m.logit.mu, m.logit.sd, m.logit.b = np.array(d["mu"]), np.array(d["sd"]), np.array(d["b"])
         if m.aux:
@@ -195,7 +213,7 @@ def _dataset(matches, cols=None):
     return np.array(X), np.array(y), np.array(g), np.array(ts), np.array(ya)
 
 
-def oof_predict(matches, cols=None, k=5, seed=0, match_w=None, aux=False):
+def oof_predict(matches, cols=None, k=5, seed=0, match_w=None, aux=False, spl=False):
     """試合ごとに k 分割した交差検証で、全部の秒の OOF 予測を作る。
     1試合の重みは秒数によらず同じ（match_w を渡せば試合ごとに変えられる）。"""
     X, y, g, ts, ya = _dataset(matches, cols)
@@ -210,7 +228,7 @@ def oof_predict(matches, cols=None, k=5, seed=0, match_w=None, aux=False):
     p = np.zeros(len(y))
     for f in range(k):
         tr, te = fold[g] != f, fold[g] == f
-        p[te] = WinModel(aux).fit(X[tr], y[tr], w[tr], ya[tr]).predict(X[te])
+        p[te] = WinModel(aux, spl).fit(X[tr], y[tr], w[tr], ya[tr]).predict(X[te])
     return X, y, g, ts, p, w, ya
 
 
@@ -257,6 +275,7 @@ def event_values(matches, ts, g, p, before=1.0, after=4.0):
     return vals
 
 
+USE_SPLINE = True  # 残りカウントを折れ線で表すか（report の比較で決める）
 USE_AUX = False  # 補助の予測を使うか（report の比較で決める。80試合では差がなかったので今は使わない）
 OLD_COLS = list(range(12))  # 勢い・延長・直近のデスを足す前の特徴
 
@@ -279,22 +298,25 @@ def report(matches):
         print(f"勝敗とカウントの記録があるガチエリアの試合が {len(ms)} 試合しかありません（20試合以上必要）")
         return None
     print(f"ガチエリア {len(ms)}試合で、試合ごとに分けた5分割の交差検証（OOF）。5回くじを変えた平均")
-    configs = (("カウント差と時間だけ", [0, 1, 2], False), ("前回の特徴", OLD_COLS, False),
-               ("勢い・延長・直近のデスを追加", None, False), ("＋30秒後の予測を補助に", None, True))
-    for name, cols, aux in configs:
-        res = [metrics(*(lambda r: (r[1], r[4], r[5]))(oof_predict(ms, cols, seed=sd, aux=aux))) for sd in range(5)]
+    configs = (("カウント差と時間だけ", [0, 1, 2], False, False), ("前回の特徴", OLD_COLS, False, False),
+               ("勢い・延長・直近のデスを追加", None, False, False), ("＋残りカウントを折れ線で", None, False, True),
+               ("＋30秒後の予測を補助に", None, True, True))
+    for name, cols, aux, spl in configs:
+        res = [metrics(*(lambda r: (r[1], r[4], r[5]))(oof_predict(ms, cols, seed=sd, aux=aux, spl=spl)))
+               for sd in range(5)]
         ll, br, auc = np.mean(res, axis=0)
         print(f"  {name:<18} 対数損失 {ll:.3f}  Brier {br:.3f}  AUC {auc:.3f}")
     print(f"  （何も分からないときの対数損失は {np.log(2):.3f}）")
-    X, y, g, ts, p, w, ya = oof_predict(ms, aux=USE_AUX)
+    X, y, g, ts, p, w, ya = oof_predict(ms, aux=USE_AUX, spl=USE_SPLINE)
     print("  時間帯ごとの AUC:", "  ".join(
         f"{a}〜{b}秒 {metrics(y[s], p[s], w[s])[2]:.2f}" for a, b in ((0, 100), (100, 200), (200, 400))
         for s in [(X[:, 0] * MATCH_LEN >= a) & (X[:, 0] * MATCH_LEN < b)] if s.sum() > 100))
     print("\n■ 確率のずれ（予測した勝率の帯ごとに、実際に勝った割合）")
     for a, b, pm, ym, n in calibration(y, p, w):
         print(f"  予測 {a * 100:3.0f}〜{min(b, 1) * 100:3.0f}%  予測の平均 {pm * 100:4.1f}%  実際 {ym * 100:4.1f}%  （{n}秒分）")
-    full = WinModel(USE_AUX).fit(X, y, w, ya)
-    names = FEATURES + (["30秒後のカウント差の動き（予測）"] if USE_AUX else [])
+    full = WinModel(USE_AUX, USE_SPLINE).fit(X, y, w, ya)
+    names = FEATURES + ([f"味方の残り{int(k * 100)}未満の分" for k in KNOTS] + [f"敵の残り{int(k * 100)}未満の分" for k in KNOTS]
+                        if USE_SPLINE else []) + (["30秒後のカウント差の動き（予測）"] if USE_AUX else [])
     print("\n■ 全試合で学習したときの係数（標準化後。正なら勝ちやすくなる向き）")
     for name, b in sorted(zip(names, full.logit.b[1:]), key=lambda x: -abs(x[1]))[:10]:
         print(f"  {name:<24} {b:+.2f}")
@@ -313,7 +335,7 @@ def load_model(store):
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
-        if d.get("features") != FEATURES:
+        if d.get("features") != FEATURES or d["model"].get("spline", False) != USE_SPLINE:
             return None  # 特徴が変わった古いモデルは使わない（次の作り直しで置き換わる）
         m = WinModel.from_dict(d["model"])
     except (OSError, ValueError, KeyError):
