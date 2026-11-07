@@ -21,7 +21,7 @@ from .storage import Store
 from .tracker import KIND_LABEL, Tracker
 from . import learning, winprob
 
-FPS = 5
+FPS = 10  # 1秒に読むコマ数（溜まってすぐ使うスペシャルを見落とさないよう、多めに読む）
 
 
 class Notices:

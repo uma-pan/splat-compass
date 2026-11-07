@@ -2,6 +2,7 @@
 
 録画を後から処理するときも、キャプボの映像をその場で処理するときも同じものを使う。
 """
+from collections import deque
 from dataclasses import dataclass, field
 
 import cv2
@@ -9,7 +10,11 @@ import cv2
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
                   bar_band, crop_icon, crop_killcam, read_bubble_counts, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
-STABLE = 3           # 状態が変わったとみなす連続コマ数
+STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
+STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
+STABLE_SP = 0.5      # スペシャルの溜まった表示が出た・消えたとみなすのに見る秒数
+QUIET_SEC = 1.5      # 「溜まってすぐ使った」とみなすには、前後これだけ溜まった表示が出ていないこと
+MIN_DEAD = 2.5       # 倒されてからこれより早く復活したら、表示の読み違いとみなして取り消す
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
 ICON_FROM, ICON_TO = 15.0, 60.0  # ブキのアイコンを切り出す時間帯（試合開始からの秒）
@@ -83,7 +88,6 @@ class Tracker:
         self.match = None          # 進行中の試合
         self.finished = None       # 終わって勝敗待ちの試合
         self.cur = None            # 確定している8人の状態
-        self.pend, self.pend_n = None, 0
         self.on_n, self.off_since = 0, None
         self.last_rule = (None, -1e9)   # (ルール名, 見た時刻)
         self.ready_at = [None] * 8  # 各枠のスペシャルが溜まった時刻
@@ -239,7 +243,7 @@ class Tracker:
         self.match = Match(start=t)
         if t - self.last_rule[1] < RULE_KEEP:
             self.match.rule = self.last_rule[0]
-        self.cur, self.pend, self.pend_n = None, None, 0
+        self.cur = None
         self.on_n, self.off_since = 0, None
         self.ready_at = [None] * 8
         self.resp_prev = False
@@ -333,28 +337,95 @@ class Tracker:
         if self.finished is not None:
             self._close_finished()
 
+    def _quick_special(self, k, t0, t1):
+        """溜まってすぐ使ったスペシャル。「溜まった」と「発動」を続けて記録する。"""
+        if self.match is None or t0 - self.match.start < IGNORE_FIRST:
+            return
+        c = self.cur
+        alive = (sum(x != DEAD for x in c[:4]), sum(x != DEAD for x in c[4:]))
+        sps = (sum(x == SPECIAL for x in c[:4]), sum(x == SPECIAL for x in c[4:]))
+        for t, kind in ((t0, "special_ready"), (t1, "special_used")):
+            e = Event(t, t - self.match.start, SLOT_NAMES[k], kind, alive, sps)
+            self.match.events.append(e)
+            self.on_event(self.match, e)
+
+    @staticmethod
+    def _want(h, cur, t):
+        """枠の読みの並び h（直近1秒）から、今の状態として認めるもの。決めきれなければ None。"""
+        def last(sec):
+            return [x for tt, x in h if tt >= t - sec]
+        if cur == DEAD:
+            r = last(STABLE_BACK)
+            if len(r) >= 2 and all(x in (ALIVE, SPECIAL) for x in r):
+                return SPECIAL if sum(x == SPECIAL for x in r) * 2 > len(r) else ALIVE
+            return None
+        r = last(STABLE_DEAD)
+        if len(r) >= 3 and all(x == DEAD for x in r) and h[0][0] <= t - STABLE_DEAD + 0.05:
+            return DEAD
+        r = [x for x in last(STABLE_SP) if x is not None]
+        if cur == ALIVE and len(r) >= 3 and sum(x == SPECIAL for x in r) >= 0.6 * len(r) \
+                and h[0][0] <= t - STABLE_SP + 0.05:
+            return SPECIAL
+        if cur == SPECIAL and len(r) >= 3 and all(x == ALIVE for x in r) and h[0][0] <= t - STABLE_SP + 0.05:
+            return ALIVE
+        return None
+
     def _update_slots(self, t, slots):
+        """8枠の状態を、枠ごとに少し前からの読みを見て更新する。
+        - 倒された: 0.6秒ずっと「倒された」と読めたとき（画面の演出で一瞬暗くなるのを除く）
+        - スペシャルが溜まった: 0.5秒のうち6割以上「溜まった」と読めたとき（溜まった表示は明るさが脈打つので）
+        - 溜まった表示が消えた: 0.5秒ずっと普通の表示のとき
+        - 溜まってすぐ使った（エナジースタンドなど）: 溜まった表示が一瞬だけ出て、前後しばらく出ていないとき"""
         if self.cur is None:
             if None not in slots:
-                self.cur = slots
+                self.cur = list(slots)
+                self.hist = [deque() for _ in range(8)]
+                self.quick = [None] * 8   # 一瞬出た溜まった表示（始め, 終わり）。このあと出なければ「すぐ使った」
+                self.last_sp = [-1e9] * 8  # 最後に「溜まった」と読めた時刻
+                self.last_death = [None] * 8
+                self.bursts = []  # 終わった一瞬の光り [(枠, (始め, 終わり))]
             return
-        st = [self.cur[k] if slots[k] is None else slots[k] for k in range(8)]
-        if st == self.cur:
-            self.pend, self.pend_n = None, 0
-            return
-        if st == self.pend:
-            self.pend_n += 1
-        else:
-            self.pend, self.pend_n = st, 1
-        if self.pend_n < STABLE:
-            return
-        old, new = self.cur, self.pend
-        if sum(a != DEAD and b == DEAD for a, b in zip(old, new)) >= MASS_DEATH:
-            # 5人以上が同時に倒れることはまずない。回線落ちなどで画面が暗くなったとみなして無視する
-            self.pend, self.pend_n = None, 0
-            return
-        self.cur, self.pend, self.pend_n = new, None, 0
+        commit = []
         for k in range(8):
+            h = self.hist[k]
+            h.append((t, slots[k]))
+            while h and h[0][0] < t - 1.0:
+                h.popleft()
+            c = self.cur[k]
+            if slots[k] == SPECIAL:
+                if c == ALIVE and self.quick[k] is None and t - self.last_sp[k] > QUIET_SEC:
+                    self.quick[k] = [t, t]
+                elif self.quick[k] is not None:
+                    self.quick[k][1] = t
+                self.last_sp[k] = t
+            q = self.quick[k]
+            if q is not None and t - q[1] > QUIET_SEC:  # 一瞬だけ出て、そのあと出ていない
+                # 何人もの枠が同時に一瞬光ったのは、画面全体が明るくなる演出とみなす
+                others = [(a, b) for kk, (a, b) in self.bursts if kk != k] + \
+                         [tuple(self.quick[kk]) for kk in range(8) if kk != k and self.quick[kk] is not None]
+                flash = any(a <= q[1] + 0.3 and q[0] <= b + 0.3 for a, b in others)
+                if self.cur[k] == ALIVE and q[1] - q[0] < STABLE_SP and not flash:
+                    self._quick_special(k, q[0], q[1])
+                self.bursts.append((k, (q[0], q[1])))
+                self.quick[k] = None
+            self.bursts = [(kk, ab) for kk, ab in self.bursts if ab[1] > t - 5]
+            want = self._want(h, c, t)
+            if want is not None and want != c:
+                commit.append((k, want))
+        dark = sum(slots[k] == DEAD and self.cur[k] != DEAD for k in range(8))
+        if dark >= MASS_DEATH:
+            # 5人以上が同時に倒れることはまずない。回線落ちなどで画面が暗くなったとみなし、倒れたことにはしない
+            commit = [(k, w) for k, w in commit if w != DEAD]
+        if not commit:
+            return
+        old = list(self.cur)
+        new = list(self.cur)
+        for k, w in commit:
+            new[k] = w
+            if w == SPECIAL:
+                self.quick[k] = None  # ちゃんと溜まった（一瞬ではなかった）
+        self.cur = new
+        for k, _ in commit:
             if new[k] == SPECIAL and old[k] != SPECIAL:
                 self.ready_at[k] = t
             elif new[k] != SPECIAL:
@@ -371,10 +442,18 @@ class Tracker:
                 kind = "dead_with_special" if a == SPECIAL else "dead"
             elif a == DEAD:
                 kind = "respawn"
+                d = self.last_death[k]
+                if d is not None and t - d.t < MIN_DEAD and d in self.match.events:
+                    # すぐ戻った＝倒されてはいなかった（画面の演出などで暗く見えただけ）
+                    self.match.events.remove(d)
+                    self.last_death[k] = None
+                    continue
             elif b == SPECIAL:
                 kind = "special_ready"
             else:
                 kind = "special_used"
             e = Event(t, t - self.match.start, SLOT_NAMES[k], kind, alive, sps)
             self.match.events.append(e)
+            if b == DEAD:
+                self.last_death[k] = e
             self.on_event(self.match, e)

@@ -16,7 +16,7 @@ from .storage import Store
 from .tracker import Tracker
 from . import learning
 
-FPS = 5
+FPS = 10  # 1秒に読むコマ数（溜まってすぐ使うスペシャルを見落とさないよう、多めに読む）
 
 
 def recorded_at(path):
