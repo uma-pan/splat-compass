@@ -55,7 +55,9 @@ def win_prob(tr, t, model):
     last = m.timeline[-1]
     if t - last[0] > 2.5:
         return None
-    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur)
+    evs = [e.row() for e in m.events]
+    ctx = winprob.context(m.timeline, evs, t)
+    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx)
     return float(model.predict(np.array([f]))[0])
 
 

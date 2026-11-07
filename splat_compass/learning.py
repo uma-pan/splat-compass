@@ -40,7 +40,7 @@ def retrain(store=None, log=print):
     ids = [m["_file"] for m in ms]
     n = len(ms)
     match_w = 0.5 ** ((n - 1 - np.arange(n)) / HALF_LIFE)
-    X, y, g, ts, p, w = winprob.oof_predict(ms, match_w=match_w)
+    X, y, g, ts, p, w, ya = winprob.oof_predict(ms, match_w=match_w, aux=winprob.USE_AUX)
     ll, brier, auc = winprob.metrics(y, p, w)
     old = winprob.load_model(store)
     replace, reason = True, "初めてのモデル"
@@ -56,7 +56,7 @@ def retrain(store=None, log=print):
             replace = bool(old.oof_logloss is None or ll <= old.oof_logloss + TOLERANCE)
             reason = f"OOF 前 {old.oof_logloss} / 新 {ll:.3f}"
     if replace:
-        full = winprob.Logistic().fit(X, y, w)
+        full = winprob.WinModel(winprob.USE_AUX).fit(X, y, w, ya)
         winprob.save_model(full, store, ids, float(ll))
     hist_path = os.path.join(store.root, "model_history.json")
     try:

@@ -60,16 +60,23 @@ def push_episodes(m):
     return eps
 
 
+PASS_MARGIN = 0.03  # チェックポイントをこれだけ越えたら「突破」とみなす
+REACH_MARGIN = 0.02  # 目印の手前これだけで止まっていても「届いた」とみなす（止まる位置は目印の中心より少し手前）
+
+
 def checkpoint_times(m):
-    """各チェックポイントが最初に通られた時刻（試合開始からの秒）と、どちらが通ったか。
-    中央より左（味方側）のチェックポイントは相手が、右（敵側）は味方が通る。中央に近い順に並べる。"""
+    """各チェックポイントに最初に届いた時刻と、突破した時刻（試合開始からの秒）、どちらが通ったか。
+    中央より左（味方側）のチェックポイントは相手が、右（敵側）は味方が通る。
+    ヤグラはチェックポイントで止まり、突破しないと次へ進めないので、突破した時刻のほうが大事。"""
     cps = m.get("checkpoints") or []
     pts = _smooth_positions(m.get("objective") or [])
     out = []
     for c in sorted(cps, key=abs):
-        who = "味方" if c > 0 else "敵"
-        hit = next((t for t, p in pts if (p >= c if c > 0 else p <= c)), None)
-        out.append({"pos": c, "by": who, "t": None if hit is None else hit - m["video_start"],
+        sign = 1 if c > 0 else -1
+        reached = next((t for t, p in pts if p * sign >= abs(c) - REACH_MARGIN), None)
+        passed = next((t for t, p in pts if p * sign >= abs(c) + PASS_MARGIN), None)
+        rel = lambda x: None if x is None else x - m["video_start"]
+        out.append({"pos": c, "by": "味方" if c > 0 else "敵", "reached": rel(reached), "passed": rel(passed),
                     "order": sum(1 for x in cps if (x > 0) == (c > 0) and abs(x) < abs(c)) + 1})
     return out
 
@@ -98,15 +105,15 @@ def _avg(xs):
     return sum(xs) / len(xs) if xs else float("nan")
 
 
-def _report_checkpoints(ms):
-    """一番中央に近いチェックポイント（第1チェックポイント）を、どちらが先に、何秒で取ったか。"""
+def _report_checkpoints(ms, rule):
+    """第1チェックポイントを、どちらが先に、何秒で取ったか。ヤグラは突破した時刻、ホコは届いた時刻で見る。"""
+    key = "passed" if rule == "ガチヤグラ" else "reached"
+    word = "突破" if key == "passed" else "到達"
     rows = []
     for m in ms:
-        first = [x for x in checkpoint_times(m) if x["order"] == 1 and x["t"] is not None]
-        if not first:
-            continue
-        f = min(first, key=lambda x: x["t"])
-        rows.append((m, f))
+        first = [x for x in checkpoint_times(m) if x["order"] == 1 and x[key] is not None]
+        if first:
+            rows.append((m, min(first, key=lambda x: x[key])))
     if not rows:
         print("  チェックポイントの記録がまだありません")
         return
@@ -115,8 +122,13 @@ def _report_checkpoints(ms):
         known = [m for m, _ in g if m.get("result") in ("勝ち", "負け")]
         wins = sum(m["result"] == "勝ち" for m in known)
         if g:
-            print(f"  第1チェックポイントを先に取ったのが{who}: {len(g)}試合  平均{_avg([f['t'] for _, f in g]):.0f}秒で取得"
+            print(f"  第1チェックポイントを先に{word}したのが{who}: {len(g)}試合  平均{_avg([f[key] for _, f in g]):.0f}秒"
                   + (f"  勝率{wins / len(known) * 100:.0f}%" if known else ""))
+    if rule == "ガチヤグラ":
+        stay = [x["passed"] - x["reached"] for m in ms for x in checkpoint_times(m)
+                if x["passed"] is not None and x["reached"] is not None]
+        if stay:
+            print(f"  チェックポイントに届いてから突破するまで 平均{_avg(stay):.1f}秒（{len(stay)}回）")
 
 
 def report(matches):
@@ -132,7 +144,7 @@ def report(matches):
         print(f"  押し込まれた深さの平均 {_avg([-e['deepest'] for _, e in eps]) * 100:.0f}%（ゴールまでを100%として）")
         if rule == "ガチホコ":
             print(f"  そのうちリセットで中央に戻ったもの {sum(e['reset'] for e in ok)}回")
-        _report_checkpoints(ms)
+        _report_checkpoints(ms, rule)
         for res in ("勝ち", "負け"):
             g = [e for m, e in eps if m.get("result") == res]
             n = sum(1 for m in ms if m.get("result") == res)

@@ -22,7 +22,12 @@ FEATURES = [
     "経過時間", "カウント差", "カウント差×経過時間", "味方カウント", "敵カウント",
     "確保（味方+1/敵-1）", "確保×経過時間", "人数差", "味方の生存", "敵の生存",
     "味方のスペシャル準備", "敵のスペシャル準備",
+    "味方カウントの減り（直近15秒）", "敵カウントの減り（直近15秒）", "勢い（敵の減り−味方の減り）",
+    "延長戦", "味方のデス（直近10秒）", "敵のデス（直近10秒）",
 ]
+MOMENTUM = 15.0  # カウントの勢いを見る秒数
+RECENT = 10.0    # 直近のデスを数える秒数
+AUX_AHEAD = 30.0  # 近い未来の予測（補助）で見る秒数
 
 
 def _states_at(m):
@@ -45,24 +50,62 @@ def _states_at(m):
     return at
 
 
-def features(elapsed, l, r, lf, rf, slots):
+def context(timeline, events, t):
+    """勢いと直近のデスを計算するための材料: (15秒前の味方カウント, 敵カウント, 直近10秒の味方のデス, 敵のデス)。"""
+    l_ago = r_ago = None
+    for row in timeline:
+        if row[0] > t - MOMENTUM:
+            break
+        l_ago, r_ago = row[1], row[2]
+    if l_ago is None and timeline:
+        l_ago, r_ago = timeline[0][1], timeline[0][2]
+    ad = ed = 0
+    for e in events:
+        if t - RECENT < e[0] <= t and "倒された" in e[3]:
+            if e[2][0] == "左":
+                ad += 1
+            else:
+                ed += 1
+    return l_ago, r_ago, ad, ed
+
+
+def features(elapsed, l, r, lf, rf, slots, ctx=(None, None, 0, 0)):
     """1時点の特徴量。slots は8枠の状態（0=倒されている 1=生きている 2=スペシャルあり、左4つが味方）。"""
     el = min(elapsed / MATCH_LEN, 1.2)
     ally = sum(x > 0 for x in slots[:4])
     enemy = sum(x > 0 for x in slots[4:])
     ctl = 1 if lf and not rf else (-1 if rf and not lf else 0)
     diff = (r - l) / 100  # カウントは少ないほど有利。正なら味方がリード
+    l_ago, r_ago, ad, ed = ctx
+    ld = ((l_ago if l_ago is not None else l) - l) / 100  # 味方カウントの減り（味方が進めた量）
+    rd = ((r_ago if r_ago is not None else r) - r) / 100
     return [el, diff, diff * el, l / 100, r / 100, ctl, ctl * el, (ally - enemy) / 4,
-            ally / 4, enemy / 4, sum(x == 2 for x in slots[:4]) / 4, sum(x == 2 for x in slots[4:]) / 4]
+            ally / 4, enemy / 4, sum(x == 2 for x in slots[:4]) / 4, sum(x == 2 for x in slots[4:]) / 4,
+            ld, rd, ld - rd, float(elapsed > MATCH_LEN), ad / 4, ed / 4]
 
 
 def rows(m):
     """1試合を (時刻, 特徴量) の並びにする。"""
     at = _states_at(m)
+    tl = m.get("timeline") or []
+    evs = sorted(m["events"], key=lambda e: e[0])
     out = []
-    for t, l, r, lf, rf in m.get("timeline") or []:
+    for t, l, r, lf, rf in tl:
         st = at(t)
-        out.append((t, features(t - m["video_start"], l, r, lf, rf, [st[s] for s in SLOTS])))
+        out.append((t, features(t - m["video_start"], l, r, lf, rf, [st[s] for s in SLOTS],
+                                context(tl, evs, t))))
+    return out
+
+
+def aux_target(m):
+    """各時点から30秒後に、カウント差（味方のリード）がどれだけ動いたか。"""
+    tl = m.get("timeline") or []
+    out = []
+    j = 0
+    for i, (t, l, r, *_) in enumerate(tl):
+        while j < len(tl) - 1 and tl[j][0] < t + AUX_AHEAD:
+            j += 1
+        out.append(((tl[j][2] - tl[j][1]) - (r - l)) / 100)
     return out
 
 
@@ -88,22 +131,74 @@ class Logistic:
         return 1 / (1 + np.exp(-Z @ self.b))
 
 
+class Ridge:
+    def fit(self, X, y, w, l2=1.0):
+        self.mu, self.sd = X.mean(0), X.std(0) + 1e-9
+        Z = np.c_[np.ones(len(X)), (X - self.mu) / self.sd]
+        W = w / w.mean()
+        A = Z.T @ (Z * W[:, None]) + l2 * np.diag(np.r_[0, np.ones(Z.shape[1] - 1)])
+        self.b = np.linalg.solve(A, Z.T @ (y * W))
+        return self
+
+    def predict(self, X):
+        return np.c_[np.ones(len(X)), (X - self.mu) / self.sd] @ self.b
+
+
+class WinModel:
+    """勝率モデル。aux=True なら、まず「30秒後のカウント差の動き」を予測し、それも入力に加えて勝率を出す。"""
+
+    def __init__(self, aux=False):
+        self.aux = aux
+        self.ridge = None
+
+    def fit(self, X, y, w, y_aux=None):
+        if self.aux:
+            self.ridge = Ridge().fit(X, y_aux, w)
+            X = np.c_[X, self.ridge.predict(X)]
+        self.logit = Logistic().fit(X, y, w)
+        return self
+
+    def predict(self, X):
+        if self.aux:
+            X = np.c_[X, self.ridge.predict(X)]
+        return self.logit.predict(X)
+
+    # 保存用
+    def to_dict(self):
+        d = {"aux": self.aux, "mu": self.logit.mu.tolist(), "sd": self.logit.sd.tolist(), "b": self.logit.b.tolist()}
+        if self.aux:
+            d["ridge"] = {"mu": self.ridge.mu.tolist(), "sd": self.ridge.sd.tolist(), "b": self.ridge.b.tolist()}
+        return d
+
+    @classmethod
+    def from_dict(cls, d):
+        m = cls(d.get("aux", False))
+        m.logit = Logistic()
+        m.logit.mu, m.logit.sd, m.logit.b = np.array(d["mu"]), np.array(d["sd"]), np.array(d["b"])
+        if m.aux:
+            m.ridge = Ridge()
+            r = d["ridge"]
+            m.ridge.mu, m.ridge.sd, m.ridge.b = np.array(r["mu"]), np.array(r["sd"]), np.array(r["b"])
+        return m
+
+
 def _dataset(matches, cols=None):
-    X, y, g, ts = [], [], [], []
+    X, y, g, ts, ya = [], [], [], [], []
     for i, m in enumerate(matches):
         lab = 1.0 if m["result"] == "勝ち" else 0.0
-        for t, f in rows(m):
+        for (t, f), a in zip(rows(m), aux_target(m)):
             X.append(f if cols is None else [f[c] for c in cols])
             y.append(lab)
             g.append(i)
             ts.append(t)
-    return np.array(X), np.array(y), np.array(g), np.array(ts)
+            ya.append(a)
+    return np.array(X), np.array(y), np.array(g), np.array(ts), np.array(ya)
 
 
-def oof_predict(matches, cols=None, k=5, seed=0, match_w=None):
+def oof_predict(matches, cols=None, k=5, seed=0, match_w=None, aux=False):
     """試合ごとに k 分割した交差検証で、全部の秒の OOF 予測を作る。
     1試合の重みは秒数によらず同じ（match_w を渡せば試合ごとに変えられる）。"""
-    X, y, g, ts = _dataset(matches, cols)
+    X, y, g, ts, ya = _dataset(matches, cols)
     rng = np.random.default_rng(seed)
     order = rng.permutation(len(matches))
     fold = np.empty(len(matches), int)
@@ -115,8 +210,8 @@ def oof_predict(matches, cols=None, k=5, seed=0, match_w=None):
     p = np.zeros(len(y))
     for f in range(k):
         tr, te = fold[g] != f, fold[g] == f
-        p[te] = Logistic().fit(X[tr], y[tr], w[tr]).predict(X[te])
-    return X, y, g, ts, p, w
+        p[te] = WinModel(aux).fit(X[tr], y[tr], w[tr], ya[tr]).predict(X[te])
+    return X, y, g, ts, p, w, ya
 
 
 def metrics(y, p, w):
@@ -162,31 +257,50 @@ def event_values(matches, ts, g, p, before=1.0, after=4.0):
     return vals
 
 
+USE_AUX = False  # 補助の予測を使うか（report の比較で決める。80試合では差がなかったので今は使わない）
+OLD_COLS = list(range(12))  # 勢い・延長・直近のデスを足す前の特徴
+
+
+def calibration(y, p, w, bins=(0, .2, .4, .6, .8, 1.0001)):
+    """予測した勝率の帯ごとに、実際に勝った割合を比べる。"""
+    out = []
+    for a, b in zip(bins, bins[1:]):
+        s = (p >= a) & (p < b)
+        if w[s].sum() > 0:
+            out.append((a, b, float(np.average(p[s], weights=w[s])), float(np.average(y[s], weights=w[s])),
+                        int(len(set(np.where(s)[0])))))
+    return out
+
+
 def report(matches):
     ms = [m for m in matches if m.get("rule") == "ガチエリア" and m.get("timeline")
           and m.get("result") in ("勝ち", "負け")]
     if len(ms) < 20:
         print(f"勝敗とカウントの記録があるガチエリアの試合が {len(ms)} 試合しかありません（20試合以上必要）")
         return None
-    print(f"ガチエリア {len(ms)}試合で、試合ごとに分けた5分割の交差検証（OOF）")
-    base_cols = [0, 1, 2]  # 経過時間とカウント差だけ
-    for name, cols in (("カウント差と時間だけ", base_cols), ("全部の特徴", None)):
-        X, y, g, ts, p, w = oof_predict(ms, cols)
-        ll, br, auc = metrics(y, p, w)
-        print(f"  {name:<12} 対数損失 {ll:.3f}  Brier {br:.3f}  AUC {auc:.3f}")
+    print(f"ガチエリア {len(ms)}試合で、試合ごとに分けた5分割の交差検証（OOF）。5回くじを変えた平均")
+    configs = (("カウント差と時間だけ", [0, 1, 2], False), ("前回の特徴", OLD_COLS, False),
+               ("勢い・延長・直近のデスを追加", None, False), ("＋30秒後の予測を補助に", None, True))
+    for name, cols, aux in configs:
+        res = [metrics(*(lambda r: (r[1], r[4], r[5]))(oof_predict(ms, cols, seed=sd, aux=aux))) for sd in range(5)]
+        ll, br, auc = np.mean(res, axis=0)
+        print(f"  {name:<18} 対数損失 {ll:.3f}  Brier {br:.3f}  AUC {auc:.3f}")
     print(f"  （何も分からないときの対数損失は {np.log(2):.3f}）")
-    X, y, g, ts, p, w = oof_predict(ms)
-    print("  試合の時間帯ごとの AUC（全部の特徴）:", "  ".join(
+    X, y, g, ts, p, w, ya = oof_predict(ms, aux=USE_AUX)
+    print("  時間帯ごとの AUC:", "  ".join(
         f"{a}〜{b}秒 {metrics(y[s], p[s], w[s])[2]:.2f}" for a, b in ((0, 100), (100, 200), (200, 400))
         for s in [(X[:, 0] * MATCH_LEN >= a) & (X[:, 0] * MATCH_LEN < b)] if s.sum() > 100))
-    full = Logistic().fit(X, y, w)
+    print("\n■ 確率のずれ（予測した勝率の帯ごとに、実際に勝った割合）")
+    for a, b, pm, ym, n in calibration(y, p, w):
+        print(f"  予測 {a * 100:3.0f}〜{min(b, 1) * 100:3.0f}%  予測の平均 {pm * 100:4.1f}%  実際 {ym * 100:4.1f}%  （{n}秒分）")
+    full = WinModel(USE_AUX).fit(X, y, w, ya)
+    names = FEATURES + (["30秒後のカウント差の動き（予測）"] if USE_AUX else [])
     print("\n■ 全試合で学習したときの係数（標準化後。正なら勝ちやすくなる向き）")
-    for name, b in sorted(zip(FEATURES, full.b[1:]), key=lambda x: -abs(x[1])):
-        print(f"  {name:<16} {b:+.2f}")
-    for after in (4.0, 15.0):
-      print(f"\n■ 出来事の前後（1秒前→{int(after)}秒後）で勝率がどれだけ動いたか（OOF の予測で計算）")
-      vals = event_values(ms, ts, g, p, after=after)
-      for key in [("自分", "倒された"), ("味方", "倒された"), ("敵", "倒された"),
+    for name, b in sorted(zip(names, full.logit.b[1:]), key=lambda x: -abs(x[1]))[:10]:
+        print(f"  {name:<24} {b:+.2f}")
+    print("\n■ 出来事の前後（1秒前→15秒後）で勝率がどれだけ動いたか（OOF の予測で計算）")
+    vals = event_values(ms, ts, g, p, after=15.0)
+    for key in [("自分", "倒された"), ("味方", "倒された"), ("敵", "倒された"),
                 ("自分", "スペシャル発動"), ("味方", "スペシャル発動"), ("敵", "スペシャル発動")]:
         v = vals.get(key, [])
         if v:
@@ -199,10 +313,11 @@ def load_model(store):
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
-    except (OSError, ValueError):
+        if d.get("features") != FEATURES:
+            return None  # 特徴が変わった古いモデルは使わない（次の作り直しで置き換わる）
+        m = WinModel.from_dict(d["model"])
+    except (OSError, ValueError, KeyError):
         return None
-    m = Logistic()
-    m.mu, m.sd, m.b = np.array(d["mu"]), np.array(d["sd"]), np.array(d["b"])
     m.trained_on = set(d.get("trained_on", []))
     m.oof_logloss = d.get("oof_logloss")
     return m
@@ -211,9 +326,8 @@ def load_model(store):
 def save_model(model, store, trained_on=(), oof_logloss=None):
     path = os.path.join(store.root, "winprob_area.json")
     with open(path, "w", encoding="utf-8") as f:
-        json.dump({"features": FEATURES, "mu": model.mu.tolist(), "sd": model.sd.tolist(),
-                   "b": model.b.tolist(), "trained_on": sorted(trained_on), "oof_logloss": oof_logloss},
-                  f, ensure_ascii=False, indent=1)
+        json.dump({"features": FEATURES, "model": model.to_dict(), "trained_on": sorted(trained_on),
+                   "oof_logloss": oof_logloss}, f, ensure_ascii=False, indent=1)
     return path
 
 
