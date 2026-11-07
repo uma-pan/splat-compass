@@ -106,6 +106,18 @@ class Store:
             os.replace(self._done_path(), self._done_path() + ".bak")
         return n
 
+    # 設定（録画のフォルダなど）
+    def load_config(self):
+        try:
+            with open(os.path.join(self.root, "config.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def save_config(self, cfg):
+        with open(os.path.join(self.root, "config.json"), "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=1)
+
     # 録画フォルダの処理済み一覧
     def _done_path(self):
         return os.path.join(self.root, "processed_videos.json")

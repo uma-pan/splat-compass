@@ -108,7 +108,8 @@ document.querySelectorAll(".filters input").forEach(cb => cb.addEventListener("c
 """
 
 
-def build(store, video_dir, last=None):
+def scene_sections(store, video_dir, last=None):
+    """場面の一覧の部品: (試合ごとの HTML の並び, 種類の並び, 場面の数)。"""
     model = winprob.load_model(store)
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
     ms = [m for m in ms if os.path.exists(os.path.join(video_dir, m["source"]))]
@@ -143,8 +144,16 @@ def build(store, video_dir, last=None):
         sections.append(
             f'<section><h2>{html.escape(m.get("played_at", "")[:16].replace("T", " "))}　{html.escape(m.get("rule") or "ルール不明")}　'
             f'<span class="res-{html.escape(res)}">{html.escape(res)}</span></h2>{"".join(rows)}</section>')
-    filters = "".join(f'<label><input type="checkbox" value="{html.escape(k)}" checked> {html.escape(k)}</label>' for k in kinds)
-    page = PAGE.format(summary=f"{len(sections)}試合・{total}場面", filters=filters, sections="".join(sections))
+    return sections, kinds, total
+
+
+def filters_html(kinds):
+    return "".join(f'<label><input type="checkbox" value="{html.escape(k)}" checked> {html.escape(k)}</label>' for k in kinds)
+
+
+def build(store, video_dir, last=None):
+    sections, kinds, total = scene_sections(store, video_dir, last)
+    page = PAGE.format(summary=f"{len(sections)}試合・{total}場面", filters=filters_html(kinds), sections="".join(sections))
     path = os.path.join(store.root, "scenes.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write(page)

@@ -100,6 +100,11 @@ def worker(frames, store, source, out_q, stop):
         def run():
             learning.retrain(store, log=lambda s: out_q.put(("log", s)))
             model["m"] = winprob.load_model(store)
+            try:  # まとめのページも作り直しておく
+                from . import report
+                report.build(store, store.load_config().get("video_dir"))
+            except Exception as e:
+                out_q.put(("log", f"まとめのページを作れませんでした: {e}"))
         threading.Thread(target=run, daemon=True).start()
 
     def on_event(m, e):
