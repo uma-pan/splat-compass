@@ -122,6 +122,13 @@ def worker(frames, store, source, out_q, stop):
         if m.rule == "ガチエリア" and model["m"] is not None:
             for rel, what, d in learning.swings(model["m"], store.load(p)):
                 out_q.put(("log", f"  勝率が大きく動いた場面: {int(rel) // 60}:{int(rel) % 60:02d} {what}（{d * 100:+.0f}%）"))
+        try:
+            from . import feedback
+            out_q.put(("log", "この試合の振り返り:"))
+            for kind, text in feedback.for_latest(store, 1)[0][1]:
+                out_q.put(("log", f"  [{kind}] {text}"))
+        except Exception as e:
+            out_q.put(("log", f"振り返りを出せませんでした: {e}"))
         retrain_bg()
 
     began = time.time()

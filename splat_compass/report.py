@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import analyze, area, killcam, objective, scenes, winprob
+from . import analyze, area, feedback, killcam, objective, scenes, winprob
 from .storage import Store
 
 ESC = html.escape
@@ -294,6 +294,18 @@ def section_model(store, ms):
     return '<div class="grid2">' + "".join(out) + "</div>"
 
 
+def section_feedback(store):
+    blocks = []
+    color = {"気になる": "#c0392b", "良い": "#1a7f37", "情報": "#6b7280"}
+    for m, items in feedback.for_latest(store, 15):
+        res = m.get("result") or ""
+        lis = "".join(f'<li><span class="tag" style="background:{color[k]}">{ESC(k)}</span>{ESC(t)}</li>' for k, t in items)
+        blocks.append(f'<section><h2>{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
+                      f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2><ul class="fb">{lis}</ul></section>')
+    return ('<p class="muted">新しい15試合を、それぞれの試合より前の自分（普段の自分）と比べて、目立ったところだけを挙げています。'
+            '時刻は試合開始からの秒です。</p>' + "".join(blocks))
+
+
 PAGE = """<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>splat-compass</title>
 <style>
 :root {{ --bg:#f3f4f6; --card:#fff; --ink:#1f2328; --muted:#6b7280; --line:#e5e7eb; --accent:#3d7bd9; }}
@@ -339,6 +351,8 @@ section h2 {{ font-size:14px; margin:0 0 6px; }}
 .time {{ font-variant-numeric:tabular-nums; color:#666; width:44px; }}
 .filters {{ margin:10px 0; font-size:13px; }} .filters label {{ margin-right:12px; }}
 .maps {{ font-size:12px; color:var(--muted); padding-top:4px; }}
+ul.fb {{ list-style:none; padding:0; margin:0; font-size:13px; }} ul.fb li {{ padding:4px 0; border-top:1px solid #eee; }}
+.tag {{ color:#fff; font-size:11px; border-radius:4px; padding:1px 6px; margin-right:8px; }}
 </style></head><body>
 <header><h1>splat-compass</h1><span>{subtitle}</span></header>
 <nav>{tabs}</nav>
@@ -370,6 +384,7 @@ def build(store, video_dir=None):
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
     ms.sort(key=lambda m: m.get("played_at", ""))
     tabs = [("overview", "概要", lambda: section_overview(ms)),
+            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store)),
             ("rules", "ルール別・打開", lambda: section_rules(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
             ("model", "勝率モデル", lambda: section_model(store, ms))]
