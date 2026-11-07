@@ -26,6 +26,8 @@ GAUGE_MIN = 10            # ゲージが満タンのコマがこれだけ貯ま�
 GAUGE_MARGIN = 30         # 一番ゲージと合う枠が、二番目よりこれだけ多く合っていること
 RESPAWN_AFTER = 8.0        # 復活待ち表示が出てから何秒以内に復活するか
 FAKE_MATCH = 60.0    # これより短い区間は試合ではないとみなす（秒）
+NO_TIMER_START = 25.0  # 試合が始まってこの秒数のうちに残り時間が一度も出なければ、試合ではなかったとみなす
+NO_TIMER_END = 20.0    # 残り時間がこの秒数出ていなければ、試合は終わったとみなす（マップを長く開いていても切れないよう長め）
 CP_FROM, CP_TO = 10.0, 50.0  # チェックポイントを探すために棒を集める区間（試合開始からの秒）
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
@@ -156,6 +158,16 @@ class Tracker:
                 return
         else:
             self.off_since = None
+        # 残り時間の表示で、本当に試合中かを確かめる（試合後の画面を8人の表示と読み違えて続いてしまうのを防ぐ）
+        if hud_visible(img):
+            self.timer_seen = t
+        elif self.timer_seen is None and t - self.match.start > NO_TIMER_START:
+            self.match, self.cur = None, None  # 一度も残り時間が出ない＝試合ではなかった
+            self.ready_at = [None] * 8
+            return
+        elif self.timer_seen is not None and t - self.timer_seen > NO_TIMER_END:
+            self._end(self.timer_seen)
+            return
         resp = me_respawning(img)
         if resp and not self.resp_prev:
             self.match.respawn_marks.append(t)
@@ -280,6 +292,7 @@ class Tracker:
         self.cp_bands = []
         self.map_prev = False
         self.icon_caps = [[] for _ in range(8)]
+        self.timer_seen = None
         self.kill_n, self.kill_pend, self.kill_pend_n = 0, 0, 0
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
@@ -338,6 +351,24 @@ class Tracker:
         self.finished, self.match = self.match, None
         self.cur = None
         self.ready_at = [None] * 8
+
+    def end_by_hand(self, t, result=None):
+        """画面から試合の終わりを読み取れなかったときに、手で試合を終える。result: '勝ち' / '負け' / None"""
+        if self.match is not None:
+            m = self.match
+            if self.finished is not None:
+                self._close_finished()
+            m.end = t
+            self._decide_self(final=True)
+            self.finished, self.match = m, None
+            self.cur = None
+            self.ready_at = [None] * 8
+        if self.finished is None:
+            return False
+        self.finished.by_hand = True
+        self.finished.result = result
+        self._close_finished()
+        return True
 
     def _result_seen(self, img):
         """勝敗の表示が同じ読みで2コマ続いたら、その読み（'勝ち'/'負け'）。それまでは None。"""

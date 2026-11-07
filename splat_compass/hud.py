@@ -57,8 +57,8 @@ def hud_visible(img):
     x, y, w, h = TIMER_BOX
     b = img[y:y + h, x:x + w]
     dark = (b.max(axis=2) < 70).mean()
-    white = (b.min(axis=2) > 200).mean()
-    return bool(dark > 0.5 and 0.08 < white < 0.35)
+    bright = (b.max(axis=2) > 200).mean()  # 白い数字のほか、残り1分の黄色い数字や「延長中!」も含める
+    return bool(dark > 0.35 and 0.05 < bright < 0.6)
 
 
 # 自分が相手を倒したときに画面の下に出る「〇〇 をたおした!」

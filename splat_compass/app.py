@@ -91,11 +91,15 @@ LIVE_HTML = """
 <div id="notice" class="notice"></div>
 <svg id="wpchart" class="wpchart" viewBox="0 0 600 150" preserveAspectRatio="none"></svg>
 <div class="lv-grid">
-  <div class="card"><h3>試合</h3><div id="matchinfo" class="info">試合を待っています</div></div>
+  <div class="card"><h3>試合</h3><div id="matchinfo" class="info">試合を待っています</div>
+    <div id="endbox" class="endbox">試合が終わったのに続いているときは:
+      <button class="btn" onclick="endMatch('勝ち')">勝ちで終える</button>
+      <button class="btn" onclick="endMatch('負け')">負けで終える</button>
+      <button class="btn" onclick="endMatch(null)">勝敗不明で終える</button></div></div>
   <div class="card"><h3>8人</h3><div id="slots" class="slots"></div><div id="alive" class="info"></div></div>
 </div>
-<div class="card lv-weapons"><h3>8人のブキ</h3><div id="weapons" class="muted">試合が始まると読み取ります</div></div>
 <div class="card lv-log"><h3>記録</h3><ul id="logs" class="logs"></ul></div>
+<div class="card lv-weapons"><h3>8人のブキ</h3><div id="weapons" class="muted">試合が始まると読み取ります</div></div>
 """
 
 APP_CSS = """<style>
@@ -125,7 +129,10 @@ APP_CSS = """<style>
 .wcell .saved { color:#1a7f37; font-size:11px; height:14px; }
 .wmatch { background:#fff; border-radius:10px; padding:8px 12px; margin:8px 0; }
 .wmatch h2 { font-size:13px; margin:0 0 4px; }
-.lv-weapons { margin-bottom:12px; } body.compact .lv-weapons { display:none; }
+.endbox { display:none; margin-top:8px; font-size:12px; color:#6b7280; }
+.endbox.on { display:block; } .endbox .btn { padding:3px 8px; font-size:12px; margin:2px 2px 0 0; }
+body.compact .endbox { display:none !important; }
+.lv-weapons { margin-top:12px; } body.compact .lv-weapons { display:none; }
 .logs { list-style:none; margin:0; padding:0; font-size:13px; max-height:260px; overflow:auto; }
 .logs li { padding:3px 0; border-top:1px solid #eee; }
 body.compact header, body.compact nav { display:none; }
@@ -192,6 +199,7 @@ function showState(d) {
     const k = st.kills !== undefined ? `<br>倒した ${st.kills}人` : "";
     $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}`;
   }
+  $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   let html = "", alive = "";
   if (st.in_match && st.slots) {
     st.slots.forEach((x, k) => {
@@ -270,6 +278,12 @@ async function poll() {
 }
 poll();
 
+async function endMatch(result) {
+  if (!confirm((result || "勝敗不明") + "でこの試合を終えますか？")) return;
+  const r = await fetch("/api/end", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({result})});
+  if (!r.ok) alert("終えられませんでした: " + await r.text());
+}
+
 async function fixResult(file, result) {
   const r = await fetch("/api/result", {method: "POST", headers: {"Content-Type": "application/json"},
                                         body: JSON.stringify({file, result})});
@@ -313,7 +327,7 @@ def review_html(store, link):
 
 
 # ---------- サーバー ----------
-def make_handler(store, get_video_dir, st, window):
+def make_handler(store, get_video_dir, st, cmds):
     root = pathlib.Path(store.root).resolve()
     cache = {"version": None, "html": None}
 
@@ -379,6 +393,13 @@ def make_handler(store, get_video_dir, st, window):
                     with st.lock:
                         st._push(st.logs, f"ブキの名前を直しました: {body['key']} → {body.get('name') or '（消した）'}")
                     self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/end":
+                    if cmds is None:
+                        self._send(400, "映像を読んでいません".encode("utf-8"), "text/plain; charset=utf-8")
+                    else:
+                        r = body.get("result")
+                        cmds.put(("end", r if r in ("勝ち", "負け") else None))
+                        self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/result" and body.get("result") in ("勝ち", "負け"):
                     store.set_result(body["file"], body["result"])
                     with st.lock:
@@ -429,8 +450,8 @@ def make_handler(store, get_video_dir, st, window):
     return Handler
 
 
-def serve(store, get_video_dir, st, port):
-    handler = make_handler(store, get_video_dir, st, None)
+def serve(store, get_video_dir, st, port, cmds=None):
+    handler = make_handler(store, get_video_dir, st, cmds)
     for p in range(port, port + 20):  # 使われていたら次の番号
         try:
             httpd = ThreadingHTTPServer(("127.0.0.1", p), handler)
@@ -498,6 +519,7 @@ def main():
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
     stop = threading.Event()
+    cmds = queue.Queue() if (a.video or a.camera is not None) else None
     if a.video or a.camera is not None:
         if a.video:
             frames, source = video_frames(a.video, live.FPS, realtime=not a.fast), os.path.basename(a.video)
@@ -506,12 +528,12 @@ def main():
 
         def run():
             try:
-                live.worker(frames, store, source, q, stop)
+                live.worker(frames, store, source, q, stop, cmds)
             finally:
                 q.put(("end", None))
         st.reading = True
         threading.Thread(target=run, daemon=True).start()
-    url = serve(store, lambda: store.load_config().get("video_dir"), st, a.port)
+    url = serve(store, lambda: store.load_config().get("video_dir"), st, a.port, cmds)
     open_window(url)
     stop.set()
 

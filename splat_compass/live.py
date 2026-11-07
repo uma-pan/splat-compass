@@ -92,7 +92,7 @@ def status_text(tr, t):
 def status_dict(tr, t):
     """画面（アプリ）向けの今の状態。"""
     if not tr.in_match:
-        return {"in_match": False}
+        return {"in_match": False, "pending": tr.finished is not None}
     m = tr.match
     d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1),
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
@@ -137,7 +137,8 @@ def beep():
         pass
 
 
-def worker(frames, store, source, out_q, stop):
+def worker(frames, store, source, out_q, stop, cmds=None):
+    """cmds: 画面からの指示（('end', 勝敗) で試合を手で終える）が入るキュー。"""
     """映像を読み続け、表示したいものを out_q に流す。"""
     notices = Notices()
     model = {"m": winprob.load_model(store)}
@@ -161,7 +162,7 @@ def worker(frames, store, source, out_q, stop):
             out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
 
     def on_end(m):
-        if m.end is None or m.end - m.start < 150 or len(m.events) < 20:
+        if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < 150 or len(m.events) < 20):
             return
         when = dt.datetime.now() - dt.timedelta(seconds=(time.time() - began) - m.start) if source == "camera" else None
         p = store.save_match(m, source, when)
@@ -195,6 +196,13 @@ def worker(frames, store, source, out_q, stop):
     for t, img in frames:
         if stop.is_set():
             break
+        while cmds is not None and not cmds.empty():
+            cmd, arg = cmds.get()
+            if cmd == "end":
+                if tr.end_by_hand(t, arg):
+                    out_q.put(("log", f"試合を手で終えました（{arg or '勝敗不明'}）"))
+                else:
+                    out_q.put(("log", "終える試合がありません"))
         tr.feed(t, img)
         for n in notices.check(tr, t):
             out_q.put(("notice", n))
