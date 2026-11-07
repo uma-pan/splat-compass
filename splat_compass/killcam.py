@@ -24,6 +24,24 @@ TEXT_ROWS = (105, 160)        # 吹き出しの中の「〇〇 で」の行
 SAME = 0.6                    # 文字の形の重なり（IoU）がこれ以上なら同じブキとみなす
 
 
+SUBS = {"スプラッシュボム", "キューバンボム", "クイックボム", "スプリンクラー", "スプラッシュシールド", "タンサンボム",
+        "カーリングボム", "ロボットボム", "ジャンプビーコン", "ポイントセンサー", "トラップ", "ポイズンミスト",
+        "ラインマーカー", "トーピード"}
+SPECIALS = {"ウルトラショット", "グレートバリア", "ショクワンダー", "マルチミサイル", "アメフラシ", "ナイスダマ",
+            "ホップソナー", "キューインキ", "メガホンレーザー5.1ch", "ジェットパック", "ウルトラハンコ", "カニタンク",
+            "サメライド", "トリプルトルネード", "エナジースタンド", "デコイチラシ", "テイオウイカ", "ウルトラチャクチ",
+            "スミナガシート"}
+
+
+def kind_of(name):
+    """メイン・サブ・スペシャルのどれで倒されたか。"""
+    if name in SPECIALS:
+        return "スペシャル"
+    if name in SUBS:
+        return "サブ"
+    return "メイン"
+
+
 def is_bubble(bubble):
     return (bubble.max(axis=2) < 60).mean() >= 0.25
 
@@ -143,9 +161,19 @@ def report(store):
     if not total:
         print("倒されたときの画面の記録がまだありません")
         return
-    print(f"倒された画面 {total}回（名前が分かったもの {total - unknown}回）")
-    for name, n in sorted(count.items(), key=lambda x: -x[1])[:20]:
-        print(f"  {name:<20} {n:4d}回  {n / (total - unknown) * 100:4.1f}%")
+    known = total - unknown
+    print(f"倒された画面 {total}回（名前が分かったもの {known}回）")
+    by_kind = {}
+    for name, n in count.items():
+        by_kind.setdefault(kind_of(name), []).append((name, n))
+    for kind in ("メイン", "サブ", "スペシャル"):
+        items = sorted(by_kind.get(kind, []), key=lambda x: -x[1])
+        if not items:
+            continue
+        sub = sum(n for _, n in items)
+        print(f"\n■ {kind}で倒された: {sub}回（{sub / known * 100:.0f}%）")
+        for name, n in items[:15]:
+            print(f"  {name:<20} {n:4d}回")
 
 
 def main():
