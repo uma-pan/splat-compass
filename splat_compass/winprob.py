@@ -358,9 +358,10 @@ def main():
     ap.add_argument("--data", help="記録の保存先")
     a = ap.parse_args()
     store = Store(a.data)
-    model = report([m for m in store.matches() if not m.get("interrupted")])
-    if model is not None:
-        print(f"\nモデルを保存しました: {save_model(model, store)}")
+    report([m for m in store.matches() if not m.get("interrupted")])
+    # 画面で使うモデルの作り直し・入れ替えは learning に任せる（学習に使った試合を覚えておくため）
+    from . import learning
+    learning.retrain(store)
 
 
 if __name__ == "__main__":

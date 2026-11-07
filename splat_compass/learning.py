@@ -44,7 +44,9 @@ def retrain(store=None, log=print):
     ll, brier, auc = winprob.metrics(y, p, w)
     old = winprob.load_model(store)
     replace, reason = True, "初めてのモデル"
-    if old is not None:
+    if old is not None and not old.trained_on:
+        reason = "前のモデルの学習に使った試合が分からないので入れ替え"
+    elif old is not None:
         new_idx = [i for i, k in enumerate(ids) if k not in old.trained_on]
         if len(new_idx) >= MIN_NEW:
             sel = np.isin(g, new_idx)
