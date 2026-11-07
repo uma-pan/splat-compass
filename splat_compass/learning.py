@@ -79,6 +79,52 @@ def retrain(store=None, log=print):
     return replace
 
 
+def predict_match(store, m, area_model=None):
+    """1試合の毎秒の勝率 (時刻の並び, 勝率の並び)。出せなければ None。
+    ガチエリアは勝率モデル、ほかのルールはエリアから作った簡単なモデル（目安）。"""
+    rs = winprob.rows(m)
+    if len(rs) < 10:
+        return None
+    X = np.array([f for _, f in rs])
+    tt = np.array([t for t, _ in rs])
+    if m.get("rule") == "ガチエリア":
+        model = area_model or winprob.load_model(store)
+        return (tt, model.predict(X)) if model is not None else None
+    if m.get("rule") in winprob.SIMPLE_RULES:
+        simple = winprob.load_simple(store)
+        return (tt, simple.predict(X[:, winprob.SIMPLE_COLS])) if simple is not None else None
+    return None
+
+
+def contribution(store, m, before=1.0, after=4.0, area_model=None):
+    """自分の行動の前後で勝率がどれだけ動いたかの合計。{'倒した'/'倒された'/'スペシャル': [回数, 合計]}
+    1つ1つの行動の前1秒と後4秒の勝率の差を足す。ほかの人の動きも混ざるので、目安として見る。"""
+    pr = predict_match(store, m, area_model)
+    me = m.get("me_slot")
+    if pr is None or not me:
+        return None
+    tt, pp = pr
+
+    def wp(t):
+        return pp[min(max(np.searchsorted(tt, t), 0), len(pp) - 1)]
+    out = {"倒した": [0, 0.0], "倒された": [0, 0.0], "スペシャル": [0, 0.0]}
+
+    def add(key, t):
+        if tt[0] <= t - before and t + after <= tt[-1]:
+            out[key][0] += 1
+            out[key][1] += float(wp(t + after) - wp(t - before))
+    for k in m.get("kills") or []:
+        add("倒した", k["t"])
+    for t, rel, slot, what, *_ in m["events"]:
+        if slot != me:
+            continue
+        if "倒された" in what:
+            add("倒された", t)
+        elif what == "スペシャル発動":
+            add("スペシャル", t)
+    return out
+
+
 def swings(model, m, top=3, before=1.0, after=4.0):
     """1試合の中で勝率が大きく動いた出来事を返す。[(試合開始からの秒, 説明, 勝率の動き)]"""
     rs = winprob.rows(m)
@@ -91,13 +137,17 @@ def swings(model, m, top=3, before=1.0, after=4.0):
         return pp[min(max(np.searchsorted(tt, t), 0), len(pp) - 1)]
     me = m.get("me_slot")
     groups = []  # 1秒以内に続いた出来事はひとまとめにする（全滅など）
-    for t, rel, slot, what, *_ in m["events"]:
-        if what not in ("倒された", "スペシャルを持ったまま倒された", "スペシャル発動"):
+    evs = list(m["events"]) + [[k["t"], k["rel"], me or "", "自分のキル"] for k in m.get("kills") or []]
+    for t, rel, slot, what, *_ in sorted(evs, key=lambda e: e[0]):
+        if what not in ("倒された", "スペシャルを持ったまま倒された", "スペシャル発動", "自分のキル"):
             continue
         if t - before < tt[0] or t + after > tt[-1]:
             continue
-        who = "自分" if slot == me else ("味方" if slot[0] == "左" else "敵")
-        label = f"{who}{'のスペシャル' if what == 'スペシャル発動' else 'デス'}"
+        if what == "自分のキル":
+            label = "自分のキル"
+        else:
+            who = "自分" if slot == me else ("味方" if slot[0] == "左" else "敵")
+            label = f"{who}{'のスペシャル' if what == 'スペシャル発動' else 'デス'}"
         if groups and t - groups[-1]["t_last"] <= 1.0:
             groups[-1]["labels"].append(label)
             groups[-1]["t_last"] = t

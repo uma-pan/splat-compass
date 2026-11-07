@@ -270,6 +270,9 @@ def event_values(matches, ts, g, p, before=1.0, after=4.0):
         def wp(t):
             i = np.searchsorted(tt, t)
             return pp[min(max(i, 0), len(pp) - 1)]
+        for k in m.get("kills") or []:  # 自分が倒した
+            if tt[0] <= k["t"] - before and k["t"] + after <= tt[-1]:
+                vals[("自分", "倒した")].append(wp(k["t"] + after) - wp(k["t"] - before))
         for t, rel, slot, what, *_ in m["events"]:
             if t - before < tt[0] or t + after > tt[-1]:
                 continue

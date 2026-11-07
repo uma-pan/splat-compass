@@ -44,8 +44,9 @@ def _numbers(m):
                 held.append(rel)
             elif last_respawn is not None and t - last_respawn <= QUICK_DEATH:
                 quick.append(rel)
+    kills = [k["rel"] for k in m["kills"]] if "kills" in m else None  # 倒した数を読む前の記録には無い
     n = {"mins": mins, "deaths": deaths, "held": held, "quick": quick, "specials": specials,
-         "early_sp_few": [], "dakai": []}
+         "early_sp_few": [], "dakai": [], "kills": kills}
     if m.get("rule") == "ガチエリア" and m.get("timeline"):
         for e in area.episodes(m):
             if e["seconds"] < 3:
@@ -68,6 +69,8 @@ def baseline(history):
     dk = [s for x in ns for s in x["dakai"] if s is not None]
     rate["dakai_sec"] = sum(dk) / len(dk) if dk else None
     rate["matches"] = len(ns)
+    kn = [x for x in ns if x["kills"] is not None]
+    rate["kills"] = sum(len(x["kills"]) for x in kn) / sum(x["mins"] for x in kn) if len(kn) >= 5 else None
     return rate
 
 
@@ -101,6 +104,12 @@ def match_feedback(m, base, store=None):
     s_got, s_exp = len(n["specials"]), base["specials"] * mins
     if s_exp >= 2 and s_got >= s_exp * 1.4 + 1:
         out.append(("良い", f"スペシャルをよく使えた {s_got}回（普段なら {s_exp:.1f}回くらい）"))
+    if n["kills"] is not None and base.get("kills"):
+        k_got, k_exp = len(n["kills"]), base["kills"] * mins
+        if k_got >= k_exp * 1.4 + 1:
+            out.append(("良い", f"よく倒せた {k_got}人（普段なら {k_exp:.1f}人くらい）"))
+        elif k_exp >= 3 and k_got <= k_exp * 0.5:
+            out.append(("気になる", f"倒した数が少なめ {k_got}人（普段なら {k_exp:.1f}人くらい）"))
     dk = [s for s in n["dakai"] if s is not None]
     if base.get("dakai_sec") and len(dk) >= 2:
         avg = sum(dk) / len(dk)
@@ -119,6 +128,16 @@ def match_feedback(m, base, store=None):
                 out.append(("情報", f"{name}に{k}回倒された"))
     if not out:
         out.append(("情報", "普段と比べて大きく違うところはありませんでした"))
+    if store is not None:
+        try:
+            from . import learning
+            c = learning.contribution(store, m)
+        except Exception:
+            c = None
+        if c and any(v[0] for v in c.values()):
+            parts = [f"{k} {v[0]}回 {v[1] * 100:+.0f}%" for k, v in c.items() if v[0]]
+            total = sum(v[1] for v in c.values())
+            out.append(("情報", f"自分の行動の前後で動いた勝率（合計 {total * 100:+.0f}%）: " + "、".join(parts)))
     order = {"気になる": 0, "良い": 1, "情報": 2}
     return sorted(out, key=lambda x: order[x[0]])
 

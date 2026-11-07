@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -73,6 +73,7 @@ class Match:
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
     map_shots: list = field(default_factory=list)  # [(時刻, マップ画面の縮小画像)]
     killcams: list = field(default_factory=list)  # [(時刻, 倒されたときの吹き出しの切り抜き)]
+    kills: list = field(default_factory=list)  # 自分が相手を倒した時刻（画面の下の「〇〇 をたおした!」）
     icons: list = field(default_factory=lambda: [None] * 8)  # 8人のブキのアイコン（生きている時の絵）
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
@@ -163,6 +164,7 @@ class Tracker:
             if kc is not None:
                 self.match.killcams.append((t, kc))
         self.resp_prev = resp
+        self._kills(t, img)
         if t - self.last_count_t >= 1.0:
             self.last_count_t = t
             c = read_counts(img)
@@ -197,6 +199,19 @@ class Tracker:
             self._collect_icons(t, rel, img, slots)
         if self.cur is not None:
             self._gauge_vote(me_special_full(img))
+
+    def _kills(self, t, img):
+        """「〇〇 をたおした!」の行が増えたら、増えた分だけ倒したとみなす（2コマ続けて同じ行数のときだけ数える）。
+        行は数秒で消え、続けて倒すと上に重なって増える。"""
+        n = read_kill_notices(img)
+        if n == self.kill_pend:
+            self.kill_pend_n += 1
+        else:
+            self.kill_pend, self.kill_pend_n = n, 1
+        if self.kill_pend_n == 2 and n != self.kill_n:
+            if n > self.kill_n and t - self.match.start >= IGNORE_FIRST:
+                self.match.kills.extend([t] * (n - self.kill_n))
+            self.kill_n = n
 
     def _collect_icons(self, t, rel, img, slots):
         """8人のアイコンを1秒おきに何枚か切り出し、ほかの切り出しと一番似ている1枚を選ぶ。
@@ -265,6 +280,7 @@ class Tracker:
         self.cp_bands = []
         self.map_prev = False
         self.icon_caps = [[] for _ in range(8)]
+        self.kill_n, self.kill_pend, self.kill_pend_n = 0, 0, 0
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
     def _gauge_vote(self, full):

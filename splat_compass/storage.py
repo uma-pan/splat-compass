@@ -88,6 +88,7 @@ class Store:
             "map_shots": map_shots,
             "weapon_icons": weapon_icons,
             "result_check": result_check,
+            "kills": [{"t": round(t, 1), "rel": round(t - m.start, 1)} for t in getattr(m, "kills", [])],
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

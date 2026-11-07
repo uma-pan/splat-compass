@@ -189,7 +189,8 @@ function showState(d) {
       const x = st.slots[st.me];
       me = "自分 " + (x === 0 ? "復活待ち" : x === 2 ? "スペシャルあり" + (st.hold ? `（${Math.floor(st.hold)}秒）` : "") : "生きている");
     }
-    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}`;
+    const k = st.kills !== undefined ? `<br>倒した ${st.kills}人` : "";
+    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}`;
   }
   let html = "", alive = "";
   if (st.in_match && st.slots) {

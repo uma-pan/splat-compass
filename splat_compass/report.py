@@ -131,6 +131,11 @@ def section_overview(ms):
            + stat("1分あたりのデス", num(a.get("自分のデス（1分あたり）"), 2), f"直近20試合 {num(r.get('自分のデス（1分あたり）'), 2)}")
            + stat("1分あたりのスペシャル", num(a.get("自分のスペシャル発動（1分あたり）"), 2),
                   f"直近20試合 {num(r.get('自分のスペシャル発動（1分あたり）'), 2)}"))
+    km = [m for m in ms if "kills" in m and m.get("video_end")]
+    if km:  # 倒した数は、読むようになってからの試合だけ
+        mins = sum((m["video_end"] - m["video_start"]) / 60 for m in km)
+        kr = sum(len(m["kills"]) for m in km) / mins
+        top += stat("1分あたりの倒した数", num(kr, 2), f"{len(km)}試合分（1試合平均 {sum(len(m['kills']) for m in km) / len(km):.1f}人）")
     rows = []
     for label, key, f in (("勝率", "勝率", pct), ("自分のデス（1分あたり）", "自分のデス（1分あたり）", lambda v: num(v, 2)),
                           ("自分のスペシャル発動（1分あたり）", "自分のスペシャル発動（1分あたり）", lambda v: num(v, 2)),
@@ -309,7 +314,7 @@ def section_model(store, ms):
                         [[f"{a * 100:.0f}〜{min(b, 1) * 100:.0f}%", pct(pm), pct(ym)] for a, b, pm, ym, n in cal])))
         vals = winprob.event_values(am, ts, g, p, after=15.0)
         items = []
-        for key in [("敵", "倒された"), ("自分", "スペシャル発動"), ("味方", "スペシャル発動"),
+        for key in [("自分", "倒した"), ("敵", "倒された"), ("自分", "スペシャル発動"), ("味方", "スペシャル発動"),
                     ("味方", "倒された"), ("自分", "倒された"), ("敵", "スペシャル発動")]:
             v = vals.get(key, [])
             if v:

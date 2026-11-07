@@ -97,7 +97,7 @@ def status_dict(tr, t):
     d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1),
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
-         "counts": m.timeline[-1][1:3] if m.timeline else None}
+         "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills)}
     return d
 
 
@@ -185,6 +185,7 @@ def worker(frames, store, source, out_q, stop):
     tr = Tracker(FPS, on_event=on_event, on_match_end=on_end)
     last_status, last_wp, cur_start = 0, 0, None
     wreader, wsent = WeaponReader(store), None
+    kills_seen = 0
 
     def send_weapons(icons):
         try:
@@ -206,6 +207,10 @@ def worker(frames, store, source, out_q, stop):
             out_q.put(("status", status_text(tr, t)))
             out_q.put(("state", status_dict(tr, t)))
             last_status = time.time()
+        if start is not None and len(tr.match.kills) > kills_seen:
+            rel = tr.match.kills[-1] - start
+            out_q.put(("log", f"{int(rel) // 60}:{int(rel) % 60:02d} 倒した（{len(tr.match.kills)}人目）"))
+        kills_seen = len(tr.match.kills) if start is not None else 0
         if start is not None and wsent != start:
             icons = tr.match.icons
             if all(i is not None for i in icons) or t - start > 60:  # 8人そろったら（遅くとも1分で）ブキを読む

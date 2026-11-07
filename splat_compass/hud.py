@@ -61,6 +61,32 @@ def hud_visible(img):
     return bool(dark > 0.5 and 0.08 < white < 0.35)
 
 
+# 自分が相手を倒したときに画面の下に出る「〇〇 をたおした!」
+KILL_BAND = (880, 1050, 760, 1300)  # y0, y1, x0, x1（複数倒すと上に重なって出る）
+_KILL_TPL = None
+
+
+def read_kill_notices(img):
+    """画面の下の「〇〇 をたおした!」が何行出ているか。"""
+    global _KILL_TPL
+    if _KILL_TPL is None:
+        t = cv2.imread(os.path.join(TEMPLATE_DIR, "kill.png"), cv2.IMREAD_GRAYSCALE)
+        _KILL_TPL = (t > 127).astype(np.float32)
+    y0, y1, x0, x1 = KILL_BAND
+    band = (img[y0:y1, x0:x1].min(axis=2) > 200).astype(np.float32)
+    if band.mean() < 0.005:  # 白い字がほとんど無ければ出ていない
+        return 0
+    r = cv2.matchTemplate(band, _KILL_TPL, cv2.TM_CCOEFF_NORMED)
+    n = 0
+    while n < 4:
+        _, mx, _, loc = cv2.minMaxLoc(r)
+        if mx < 0.6:
+            break
+        n += 1
+        r[max(0, loc[1] - 20):loc[1] + 20, :] = -1
+    return n
+
+
 def crop_icon(img, k):
     """k番目の枠のアイコン（84x80）。ブキの絵が入っている。"""
     x = SLOT_X[k]
