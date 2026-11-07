@@ -47,22 +47,29 @@ class Notices:
         return sorted(new)
 
 
-def win_prob(tr, t, model):
-    """ガチエリアの試合中なら、今の勝率（0〜1）。出せなければ None。"""
+def win_prob(tr, t, models):
+    """試合中の今の勝率（0〜1）と、どのモデルで出したか。出せなければ (None, None)。
+    ガチエリアは勝率モデル、ほかのルールはエリアから作った簡単なモデルで目安を出す。"""
     m = tr.match
-    if model is None or m is None or m.rule != "ガチエリア" or not m.timeline or tr.cur is None:
-        return None
+    if m is None or not m.timeline or tr.cur is None:
+        return None, None
     last = m.timeline[-1]
     if t - last[0] > 2.5:
-        return None
+        return None, None
     evs = [e.row() for e in m.events]
     ctx = winprob.context(m.timeline, evs, t)
     pen = (last[5], last[6]) if len(last) >= 7 else (0, 0)
-    f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx, pen)
-    return float(model.predict(np.array([f]))[0])
+    if m.rule == "ガチエリア" and models.get("area") is not None:
+        f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx, pen)
+        return float(models["area"].predict(np.array([f]))[0]), "エリア"
+    if m.rule in winprob.SIMPLE_RULES and models.get("simple") is not None:
+        f = winprob.features(t - m.start, last[1], last[2], 0, 0, tr.cur, ctx, pen)
+        x = np.array([[f[c] for c in winprob.SIMPLE_COLS]])
+        return float(models["simple"].predict(x)[0]), "目安"
+    return None, None
 
 
-def status_text(tr, t, wp=None):
+def status_text(tr, t):
     c = tr.counts()
     if not tr.in_match:
         return "試合を待っています"
@@ -76,8 +83,7 @@ def status_text(tr, t, wp=None):
     rule = tr.match.rule or ""
     ally, enemy = c["alive"]
     tag = "（不利）" if ally < enemy else ("（有利）" if ally > enemy else "")
-    wp_txt = f"  勝率 {wp * 100:.0f}%" if wp is not None else ""
-    return (f"{rule}  {int(t - tr.match.start)}秒{wp_txt}\n"
+    return (f"{rule}  {int(t - tr.match.start)}秒\n"
             f"人数 {ally} 対 {enemy}{tag}\n"
             f"スペシャル準備 味方{c['specials'][0]} 敵{c['specials'][1]}\n"
             f"自分 {me}{hold}")
@@ -95,11 +101,13 @@ def worker(frames, store, source, out_q, stop):
     """映像を読み続け、表示したいものを out_q に流す。"""
     notices = Notices()
     model = {"m": winprob.load_model(store)}
+    models = {"area": model["m"], "simple": winprob.load_simple(store)}
 
     def retrain_bg():
         def run():
             learning.retrain(store, log=lambda s: out_q.put(("log", s)))
             model["m"] = winprob.load_model(store)
+            models.update(area=model["m"], simple=winprob.load_simple(store))
             try:  # まとめのページも作り直しておく
                 from . import report
                 report.build(store, store.load_config().get("video_dir"))
@@ -133,16 +141,26 @@ def worker(frames, store, source, out_q, stop):
 
     began = time.time()
     tr = Tracker(FPS, on_event=on_event, on_match_end=on_end)
-    last_status = 0
+    last_status, last_wp, cur_start = 0, 0, None
     for t, img in frames:
         if stop.is_set():
             break
         tr.feed(t, img)
         for n in notices.check(tr, t):
             out_q.put(("notice", n))
+        start = tr.match.start if tr.match is not None else None
+        if start != cur_start:
+            cur_start = start
+            if start is not None:  # 新しい試合が始まったらグラフを消す（終わった試合のグラフは残しておく）
+                out_q.put(("wp_reset", None))
         if time.time() - last_status > 0.3:
-            out_q.put(("status", status_text(tr, t, win_prob(tr, t, model["m"]))))
+            out_q.put(("status", status_text(tr, t)))
             last_status = time.time()
+        if start is not None and t - last_wp >= 1.0:
+            last_wp = t
+            p, kind = win_prob(tr, t, models)
+            if p is not None:
+                out_q.put(("wp", (t - start, p, kind)))
     tr.flush()
     out_q.put(("log", "映像が終わりました"))
 
@@ -155,6 +173,8 @@ def run_headless(q, th):
             continue
         if kind in ("log", "notice"):
             print(("【通知】" if kind == "notice" else "") + msg, flush=True)
+        elif kind == "wp" and int(msg[0]) % 15 == 0:
+            print(f"{int(msg[0]) // 60}:{int(msg[0]) % 60:02d} 勝率{'' if msg[2] == 'エリア' else 'の目安'} {msg[1] * 100:.0f}%", flush=True)
 
 
 def run_window(q, stop):
@@ -163,9 +183,35 @@ def run_window(q, stop):
     root = tk.Tk()
     root.title("splat-compass")
     root.attributes("-topmost", True)
-    root.geometry("320x300")
-    status = tk.Label(root, text="起動中", font=("Meiryo", 13), justify="left", anchor="w")
+    root.geometry("340x430")
+    wp_label = tk.Label(root, text="勝率 —", font=("Meiryo", 22, "bold"), anchor="w")
+    wp_label.pack(fill="x", padx=8, pady=(6, 0))
+    GW, GH = 320, 90
+    graph = tk.Canvas(root, width=GW, height=GH, bg="#fafafa", highlightthickness=1, highlightbackground="#ccc")
+    graph.pack(padx=8)
+    hist = []
+    status = tk.Label(root, text="起動中", font=("Meiryo", 12), justify="left", anchor="w")
     status.pack(fill="x", padx=8, pady=6)
+
+    def draw_graph():
+        """この試合の勝率の動き。横は試合時間（5分を基本に、延長に入ったら伸ばす）、縦は0〜100%。"""
+        graph.delete("all")
+        graph.create_line(0, GH / 2, GW, GH / 2, fill="#bbb", dash=(3, 3))
+        for k in (1, 2, 3, 4):  # 1分ごとの目盛り
+            graph.create_line(GW * k / 5, 0, GW * k / 5, GH, fill="#eee")
+        if len(hist) < 2:
+            return
+        span = max(300.0, hist[-1][0] + 10)
+        pts = []
+        for rel, p in hist:
+            pts += [rel / span * GW, (1 - p) * GH]
+        graph.create_line(*pts, fill="#3d7bd9", width=2)
+
+    def show_wp(rel, p, kind):
+        hist.append((rel, p))
+        color = "#27ae60" if p >= 0.6 else ("#c0392b" if p <= 0.4 else "#333")
+        wp_label.config(text=(f"勝率 {p * 100:.0f}%" if kind == "エリア" else f"勝率の目安 {p * 100:.0f}%"), fg=color)
+        draw_graph()
     notice = tk.Label(root, text="", font=("Meiryo", 14, "bold"), fg="#c0392b", justify="left", anchor="w")
     notice.pack(fill="x", padx=8)
     log = tk.Text(root, height=8, font=("Meiryo", 9))
@@ -178,6 +224,12 @@ def run_window(q, stop):
                 kind, msg = q.get_nowait()
                 if kind == "status":
                     status.config(text=msg)
+                elif kind == "wp":
+                    show_wp(*msg)
+                elif kind == "wp_reset":
+                    hist.clear()
+                    wp_label.config(text="勝率 —", fg="#333")
+                    draw_graph()
                 elif kind == "notice":
                     notice.config(text=msg)
                     clear_at[0] = time.time() + 4
@@ -197,6 +249,7 @@ def run_window(q, stop):
         root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", close)
+    draw_graph()
     poll()
     root.mainloop()
 

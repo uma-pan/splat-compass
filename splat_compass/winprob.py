@@ -358,6 +358,40 @@ def save_model(model, store, trained_on=(), oof_logloss=None):
     return path
 
 
+# ---- ほかのルール用の目安 ----
+# ガチヤグラ・ホコ・アサリはまだ試合が少なく、ルールごとのモデルを作れない。
+# エリアの試合から「経過時間・カウント差・人数差」だけで学習した簡単なモデルを目安として使う。
+# （エリアで学習してほかのルール14試合で確かめると、全部の特徴を使うより当たった）
+SIMPLE_COLS = [0, 1, 2, 7]
+SIMPLE_RULES = ("ガチヤグラ", "ガチホコ", "ガチアサリ")
+
+
+def fit_simple(matches):
+    X, y, g, _, _ = _dataset(matches)
+    n = np.bincount(g)
+    return Logistic().fit(X[:, SIMPLE_COLS], y, 1.0 / n[g])
+
+
+def save_simple(model, store, n):
+    path = os.path.join(store.root, "winprob_simple.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"features": [FEATURES[c] for c in SIMPLE_COLS], "matches": n,
+                   "mu": model.mu.tolist(), "sd": model.sd.tolist(), "b": model.b.tolist()}, f, ensure_ascii=False, indent=1)
+
+
+def load_simple(store):
+    try:
+        with open(os.path.join(store.root, "winprob_simple.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        if d["features"] != [FEATURES[c] for c in SIMPLE_COLS]:
+            return None
+        m = Logistic()
+        m.mu, m.sd, m.b = np.array(d["mu"]), np.array(d["sd"]), np.array(d["b"])
+        return m
+    except (OSError, ValueError, KeyError):
+        return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", help="記録の保存先")

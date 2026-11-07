@@ -164,6 +164,75 @@ def read_counts(img):
     return l, r, lf, rf
 
 
+# ガチヤグラ・ガチホコのカウント。棒の下の「のこり〇〇」の吹き出しに出る。
+# 吹き出しは各チームが一番進んだ位置に付いて左右に動くので、場所ではなくチームの色で探す。
+BUBBLE_Y = (180, 275)
+BUBBLE_X = (480, 1440)
+BUBBLE_NEAR = 110  # 両チームの字がこれより近ければ、吹き出しが重なっているとみなす（px）
+
+
+def team_colors(img):
+    """(味方の色, 敵の色)。上部のアイコンのイカ・タコの形の色から取る。分からなければ None。"""
+    out = []
+    for ks in (range(4), range(4, 8)):
+        px = []
+        for k in ks:
+            x = SLOT_X[k]
+            p = img[SLOT_Y + 10:SLOT_Y + 38, x - 30:x + 30].reshape(-1, 3).astype(np.int16)
+            px.append(p[(p.max(1) - p.min(1)) > 90])
+        px = np.concatenate(px)
+        out.append(np.median(px, 0) if len(px) > 100 else None)
+    return out
+
+
+def read_bubble_counts(img):
+    """(味方のカウント, 敵のカウント)。吹き出しが見えない側は None。
+    白い字のまわりがチームの色で囲まれているものを数字とみなし、エリアのカウントと同じ見本で読む。"""
+    cols = team_colors(img)
+    band = img[BUBBLE_Y[0]:BUBBLE_Y[1], BUBBLE_X[0]:BUBBLE_X[1]].astype(np.int16)
+    white = (band.min(2) > 190).astype(np.uint8)
+    n, lab, st, _ = cv2.connectedComponentsWithStats(white)
+    near = [None if c is None else (np.abs(band - c).max(2) < 60) for c in cols]
+    protos = _digit_protos()
+    chars = ([], [])
+    for i in range(1, n):
+        x, y, w, h, a = st[i]
+        if not (22 <= h <= 45 and 6 <= w <= 34 and a >= 60):
+            continue
+        x0, x1 = max(x - 6, 0), min(x + w + 6, band.shape[1])
+        y0, y1 = max(y - 6, 0), min(y + h + 6, band.shape[0])
+        ring = np.ones((y1 - y0, x1 - x0), bool)
+        ring[y - y0:y - y0 + h, x - x0:x - x0 + w] = False
+        side, best = None, 0.5
+        for s in (0, 1):
+            if near[s] is not None:
+                f = near[s][y0:y1, x0:x1][ring].mean()
+                if f > best:
+                    side, best = s, f
+        if side is None:
+            continue
+        g = cv2.resize((lab[y:y + h, x:x + w] == i).astype(np.uint8) * 255, (20, 30),
+                       interpolation=cv2.INTER_AREA).flatten().astype(np.float32) / 255
+        d = min(protos, key=lambda k: float(((protos[k] - g) ** 2).sum()))
+        if d != "x":
+            chars[side].append((x, d))
+    if chars[0] and chars[1]:
+        # 2つの吹き出しが近いと重なって片方の字が隠れ、1文字だけ読めてしまうので、どちらも読まない
+        a = [x for x, _ in chars[0]]
+        b = [x for x, _ in chars[1]]
+        if min(abs(p - q) for p in a for q in b) < BUBBLE_NEAR:
+            return None, None
+    out = []
+    for cs in chars:
+        cs = sorted(cs)
+        if 0 < len(cs) <= 3 and cs[-1][0] - cs[0][0] < 80:
+            v = int("".join(d for _, d in cs))
+            out.append(v if v <= 100 else None)
+        else:
+            out.append(None)
+    return tuple(out)
+
+
 # ヤグラ・ホコの位置を示す、画面上部の点線の棒
 BAR_Y = 155
 BAR_LEFT, BAR_RIGHT, BAR_CENTER = 515, 1405, 960

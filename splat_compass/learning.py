@@ -37,6 +37,10 @@ def retrain(store=None, log=print):
     if len(ms) < MIN_MATCHES:
         log(f"勝率モデル: ガチエリアの試合がまだ {len(ms)} 試合なので作りません（{MIN_MATCHES}試合から）")
         return None
+    try:  # ほかのルールで使う目安のモデルは毎回作り直す（軽い）
+        winprob.save_simple(winprob.fit_simple(ms), store, len(ms))
+    except Exception as e:
+        log(f"目安のモデルを作れませんでした: {e}")
     ids = [m["_file"] for m in ms]
     n = len(ms)
     match_w = 0.5 ** ((n - 1 - np.arange(n)) / HALF_LIFE)

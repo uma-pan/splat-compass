@@ -7,12 +7,13 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, read_bubble_counts, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE = 3           # 状態が変わったとみなす連続コマ数
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
 ICON_FROM, ICON_TO = 15.0, 60.0  # ブキのアイコンを切り出す時間帯（試合開始からの秒）
+BUBBLE_DROP = 6.0  # ヤグラ・ホコのカウントが1秒に減りうる上限（これより急に減ったら読み違いとみなす。ホコを持って泳ぐと速い）
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
 GAUGE_MIN = 10            # ゲージが満タンのコマがこれだけ貯まったら、ゲージで自分の枠を決める
@@ -166,6 +167,8 @@ class Tracker:
             if c is not None:
                 pl, pr = read_penalty(img)
                 self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3]), pl, pr])
+            elif self.match.rule in ("ガチヤグラ", "ガチホコ", None):
+                self._bubble_counts(t, img)
             on_map = is_map_screen(img)
             if on_map and not self.map_prev:  # マップ画面が出るたびに1枚残す
                 self.match.map_shots.append((t, cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)))
@@ -195,6 +198,30 @@ class Tracker:
         if self.cur is not None:
             self._gauge_vote(me_special_full(img))
 
+    def _bubble_counts(self, t, img):
+        """ガチヤグラ・ガチホコのカウントを吹き出しから読む。カウントは減るだけで、急には減らない。
+        そこで、今より少なく、前に読めたときから急に減りすぎていない値が2秒続けて読めたときだけ更新する
+        （吹き出しが重なって1文字だけ読めたときの読み違いを避ける）。見えない側はそれまでの値（始めは100）のまま。"""
+        vals = read_bubble_counts(img)
+        if vals == (None, None) and not self.bub_seen:
+            return
+        self.bub_seen = True
+        for k, v in enumerate(vals):
+            if v is None:
+                continue
+            if v == self.bub[k]:  # 今の値と同じ＝正しく読めている
+                self.bub_t[k], self.bub_pend[k] = t, None
+                continue
+            # 最後に正しく読めたときから、急に減りすぎていないか
+            ok = v < self.bub[k] and self.bub[k] - v <= BUBBLE_DROP * max(t - self.bub_t[k], 1.0)
+            if not ok:
+                self.bub_pend[k] = None
+            elif self.bub_pend[k] == v:
+                self.bub[k], self.bub_pend[k], self.bub_t[k] = v, None, t
+            else:
+                self.bub_pend[k] = v
+        self.match.timeline.append([round(t, 1), self.bub[0], self.bub[1], 0, 0, None, None])
+
     def _idle(self, t, img, known):
         rule, _ = self.screens.rule(img)
         if rule:
@@ -222,6 +249,7 @@ class Tracker:
         self.resp_prev = False
         self.cp_bands = []
         self.map_prev = False
+        self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
     def _gauge_vote(self, full):
         """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""
