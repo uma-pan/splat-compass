@@ -32,7 +32,7 @@ def process(path, store):
     saved = []
 
     def on_end(m):
-        if m.end is None or m.end - m.start < 150 or len(m.events) < 20:
+        if m.end is None or m.end - m.start < 60 or len(m.events) < 5:  # ノックアウトは1分台で終わることもある
             return  # 短すぎる区間は試合ではない（ロビーや途中で切れた録画）
         p = store.save_match(m, os.path.basename(path), base + dt.timedelta(seconds=m.start))
         saved.append(p)

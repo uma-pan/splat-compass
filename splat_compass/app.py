@@ -38,6 +38,7 @@ class State:
         self.state = {"in_match": False}
         self.wp, self.wp_kind = [], None
         self.weapons, self.weapons_file = None, None  # この試合の8人のブキ、保存された試合の名前
+        self.last_saved = None  # 最後に保存した試合（次の試合が始まっても残す）
         self.notices = deque(maxlen=20)
         self.logs = deque(maxlen=300)
         self.seq = 0
@@ -76,6 +77,7 @@ class State:
                     self.weapons = msg
                 elif kind == "weapons_saved":
                     self.weapons_file = msg
+                    self.last_saved = msg
                 elif kind == "notice":
                     self._push(self.notices, msg)
                 elif kind == "log":
@@ -89,7 +91,7 @@ class State:
     def snapshot(self, since):
         with self.lock:
             return {"state": self.state, "wp": self.wp, "wp_kind": self.wp_kind, "reading": self.reading,
-                    "weapons": self.weapons, "weapons_file": self.weapons_file,
+                    "weapons": self.weapons, "weapons_file": self.weapons_file, "last_saved": self.last_saved,
                     "version": self.version, "seq": self.seq,
                     "logs": [(i, t) for i, t, _ in self.logs if i > since],
                     "notices": [(i, t) for i, t, at in self.notices if i > since and time.time() - at < 6]}
@@ -108,7 +110,10 @@ LIVE_HTML = """
     <div id="endbox" class="endbox">試合が終わったのに続いているときは:
       <button class="btn" onclick="endMatch('勝ち')">勝ちで終える</button>
       <button class="btn" onclick="endMatch('負け')">負けで終える</button>
-      <button class="btn" onclick="endMatch(null)">勝敗不明で終える</button></div></div>
+      <button class="btn" onclick="endMatch(null)">勝敗不明で終える</button></div>
+    <div id="lastbox" class="endbox"><span id="lastlabel">直前の試合</span>の勝敗を直す:
+      <button class="btn" onclick="fixLast('勝ち')">勝ち</button>
+      <button class="btn" onclick="fixLast('負け')">負け</button></div></div>
   <div class="card"><h3>8人</h3><div id="slots" class="slots"></div><div id="alive" class="info"></div></div>
 </div>
 <div class="card lv-log"><h3>記録</h3><ul id="logs" class="logs"></ul></div>
@@ -219,6 +224,8 @@ function showState(d) {
     $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}`;
   }
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
+  $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
+  if (d.last_saved) $("lastlabel").textContent = "直前の試合（" + d.last_saved.slice(9, 11) + ":" + d.last_saved.slice(11, 13) + " 開始）";
   let html = "", alive = "";
   if (st.in_match && st.slots) {
     st.slots.forEach((x, k) => {
@@ -285,6 +292,7 @@ document.addEventListener("change", async e => {
 async function poll() {
   try {
     const d = await (await fetch("/api/live?since=" + since)).json();
+    window._last = d;
     showState(d);
     showWeapons(d);
     for (const [i, t] of d.logs) {
@@ -307,6 +315,13 @@ async function endMatch(result) {
   if (!confirm((result || "勝敗不明") + "でこの試合を終えますか？")) return;
   const r = await fetch("/api/end", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({result})});
   if (!r.ok) alert("終えられませんでした: " + await r.text());
+}
+
+async function fixLast(result) {
+  const d = window._last;
+  if (!d || !d.last_saved) return;
+  if (!confirm("直前の試合を「" + result + "」にしますか？")) return;
+  await fixResult(d.last_saved + ".json", result);
 }
 
 async function fixResult(file, result) {
@@ -578,6 +593,8 @@ def main():
     a = ap.parse_args()
     store = Store(a.data)
     st = State(os.path.join(store.root, "logs"))
+    files = sorted(f for f in os.listdir(store.mdir) if f.endswith(".json"))
+    st.last_saved = files[-1][:-5] if files else None  # 起動前に保存した一番新しい試合も直せるように
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
     stop = threading.Event()

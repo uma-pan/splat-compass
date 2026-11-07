@@ -137,6 +137,10 @@ def beep():
         pass
 
 
+MIN_MATCH = 60.0   # これより短いものは試合として保存しない（ノックアウトは1分台で終わることもある）
+MIN_EVENTS = 5
+
+
 def worker(frames, store, source, out_q, stop, cmds=None):
     """cmds: 画面からの指示（('end', 勝敗) で試合を手で終える）が入るキュー。"""
     """映像を読み続け、表示したいものを out_q に流す。"""
@@ -162,7 +166,8 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
 
     def on_end(m):
-        if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < 150 or len(m.events) < 20):
+        if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < MIN_MATCH or len(m.events) < MIN_EVENTS):
+            out_q.put(("log", f"短すぎる（{int((m.end or m.start) - m.start)}秒）ので試合として保存しませんでした"))
             return
         when = dt.datetime.now() - dt.timedelta(seconds=(time.time() - began) - m.start) if source == "camera" else None
         p = store.save_match(m, source, when)
