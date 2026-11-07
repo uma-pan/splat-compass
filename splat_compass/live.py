@@ -183,7 +183,9 @@ def worker(frames, store, source, out_q, stop, cmds=None):
         retrain_bg()
 
     began = time.time()
-    tr = Tracker(FPS, on_event=on_event, on_match_end=on_end)
+    def on_log(text):
+        out_q.put(("log", f"（{dt.datetime.now():%H:%M:%S}）{text}"))
+    tr = Tracker(FPS, on_event=on_event, on_match_end=on_end, on_log=on_log)
     last_status, last_wp, cur_start = 0, 0, None
     wreader, wsent = WeaponReader(store), None
     kills_seen = 0

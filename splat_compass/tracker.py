@@ -84,7 +84,8 @@ class Match:
 
 
 class Tracker:
-    def __init__(self, fps, on_event=None, on_match_end=None):
+    def __init__(self, fps, on_event=None, on_match_end=None, on_log=None):
+        self.on_log = on_log or (lambda text: None)  # 試合の始まり・終わりを決めた理由（あとで確かめる用）
         self.fps = fps
         self.on_event = on_event or (lambda m, e: None)
         self.on_match_end = on_match_end or (lambda m: None)
@@ -146,6 +147,7 @@ class Tracker:
                 self.cur = None
                 self._set_result(self.finished, res, img)
             else:
+                self.on_log(f"勝敗の表示（{res}）を見たので試合を終えます")
                 self._end(t)
                 if self.finished is not None:
                     self._set_result(self.finished, res, img)
@@ -154,6 +156,7 @@ class Tracker:
             if self.off_since is None:
                 self.off_since = t
             elif t - self.off_since >= END_SECONDS:
+                self.on_log("上部の8人の表示が消えたので試合を終えます")
                 self._end(self.off_since)
                 return
         else:
@@ -162,10 +165,12 @@ class Tracker:
         if hud_visible(img):
             self.timer_seen = t
         elif self.timer_seen is None and t - self.match.start > NO_TIMER_START:
+            self.on_log("残り時間の表示が一度も出ないので、試合ではなかったとみなします")
             self.match, self.cur = None, None  # 一度も残り時間が出ない＝試合ではなかった
             self.ready_at = [None] * 8
             return
         elif self.timer_seen is not None and t - self.timer_seen > NO_TIMER_END:
+            self.on_log(f"残り時間の表示が{int(NO_TIMER_END)}秒出ていないので試合を終えます")
             self._end(self.timer_seen)
             return
         resp = me_respawning(img)
@@ -281,6 +286,7 @@ class Tracker:
             self.on_n = 0
 
     def _start(self, t):
+        self.on_log("試合が始まりました")
         # 直前の試合は、勝敗の表示を待つためにしばらく閉じずにおく
         self.match = Match(start=t)
         if t - self.last_rule[1] < RULE_KEEP:
@@ -341,6 +347,7 @@ class Tracker:
     def _end(self, t):
         if t - self.match.start < FAKE_MATCH:
             # 試合後の画面などを試合と読み違えた短い区間。捨てて、直前の試合の勝敗待ちを続ける
+            self.on_log(f"{int(t - self.match.start)}秒で終わったので試合ではなかったとみなします")
             self.match, self.cur = None, None
             self.ready_at = [None] * 8
             return
@@ -390,6 +397,8 @@ class Tracker:
 
     def _close_finished(self):
         m, self.finished = self.finished, None
+        if m.result is None:
+            self.on_log("勝敗の表示を読めないまま次に進んだので、勝敗不明として閉じます")
         m.interrupted = m.result is None
         self.on_match_end(m)
 

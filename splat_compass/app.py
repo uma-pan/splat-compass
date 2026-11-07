@@ -32,7 +32,8 @@ COMPACT_SIZE = (380, 600)
 class State:
     """映像を読む側から届いたものを貯めて、画面に渡す。"""
 
-    def __init__(self):
+    def __init__(self, log_dir=None):
+        self.log_dir = log_dir  # 記録の欄の内容を日ごとのファイルにも残す（あとで確かめる用）
         self.lock = threading.Lock()
         self.state = {"in_match": False}
         self.wp, self.wp_kind = [], None
@@ -42,6 +43,17 @@ class State:
         self.seq = 0
         self.version = 0      # まとめが変わるたびに増える（画面が読み直す合図）
         self.reading = False  # 映像を読んでいるか
+
+    def _write(self, text):
+        if not self.log_dir:
+            return
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            day = time.strftime("%Y%m%d")
+            with open(os.path.join(self.log_dir, f"{day}.txt"), "a", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%H:%M:%S')} {text}\n")
+        except OSError:
+            pass
 
     def _push(self, box, text):
         self.seq += 1
@@ -68,6 +80,7 @@ class State:
                     self._push(self.notices, msg)
                 elif kind == "log":
                     self._push(self.logs, msg)
+                    self._write(msg)
                 elif kind in ("saved", "report"):
                     self.version += 1
                 elif kind == "end":
@@ -187,6 +200,8 @@ function showState(d) {
   inMatch = !!st.in_match;
   if (!d.reading) {
     $("matchinfo").textContent = "映像を読んでいません（start.bat から開くと、試合中の様子が出ます）";
+  } else if (!st.in_match && st.pending) {
+    $("matchinfo").textContent = "試合が終わりました。勝敗の表示（左上の WIN! / LOSE...）を待っています";
   } else if (!st.in_match) {
     $("matchinfo").textContent = "試合を待っています";
   } else {
@@ -515,7 +530,7 @@ def main():
     ap.add_argument("--port", type=int, default=8765)
     a = ap.parse_args()
     store = Store(a.data)
-    st = State()
+    st = State(os.path.join(store.root, "logs"))
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
     stop = threading.Event()
