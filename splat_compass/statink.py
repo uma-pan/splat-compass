@@ -61,6 +61,10 @@ def find_csv_links(html, page_url=LISTING):
         m = re.search(r"(\d{4}-\d{2}-\d{2})", url)
         if m:
             out[m.group(1)] = url
+            continue
+        m = re.search(r"/(\d{4})/(\d{2})/(\d{2})[^/]*\.csv", url)  # 年/月/日.csv の形
+        if m:
+            out["-".join(m.groups())] = url
     return sorted(out.items(), reverse=True)
 
 
