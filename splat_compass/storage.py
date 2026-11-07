@@ -40,6 +40,8 @@ class Store:
             "events": [e.row() for e in m.events],
             "timeline_columns": ["時刻", "味方カウント", "敵カウント", "味方の箱が塗られている", "敵の箱が塗られている"],
             "timeline": m.timeline,
+            "objective_columns": ["時刻", "ヤグラ・ホコの位置（-1が味方のゴール、+1が敵のゴール）", "アサリのゴールが開いている"],
+            "objective": m.objective,
         }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)

@@ -114,6 +114,39 @@ def read_counts(img):
     return l, r, lf, rf
 
 
+# ヤグラ・ホコの位置を示す、画面上部の点線の棒
+BAR_Y = 155
+BAR_LEFT, BAR_RIGHT, BAR_CENTER = 515, 1405, 960
+
+
+def read_objective_pos(img):
+    """ヤグラ・ホコの位置を -1（左＝味方のゴール）〜 +1（右＝敵のゴール）で返す。見つからなければ None。
+    棒の上の丸い目印（ヤグラ・ホコ）を円として探す。四角い目印（チェックポイント）は棒からわずかに上下にずれるので外す。"""
+    band = img[BAR_Y - 30:BAR_Y + 30, BAR_LEFT + 25:BAR_RIGHT - 25]
+    g = cv2.medianBlur(cv2.cvtColor(np.ascontiguousarray(band), cv2.COLOR_RGB2GRAY), 3)
+    cs = cv2.HoughCircles(g, cv2.HOUGH_GRADIENT, dp=1, minDist=20, param1=120, param2=22,
+                          minRadius=11, maxRadius=34)
+    if cs is None:
+        return None
+    for x, y, r in cs[0]:
+        if 25 <= y <= 34:  # 棒の高さにちょうど乗っている円だけ
+            return float((x + BAR_LEFT + 25 - BAR_CENTER) / (BAR_RIGHT - BAR_CENTER))
+    return None
+
+
+_yy, _xx = np.mgrid[0:80, 0:100]
+_PIE_RING = (np.hypot(_yy - 40, _xx - 50) > 26) & (np.hypot(_yy - 40, _xx - 50) < 33)
+
+
+def asari_goal_open(img):
+    """ガチアサリで、どちらかのゴールが割られて開いているか。
+    開いている間は、カウントの間の小さな目印が大きな円グラフ（残り時間）に変わる。"""
+    c = img[120:200, 910:1010].astype(np.int16)
+    mx = c.max(axis=2)
+    s = mx - c.min(axis=2)
+    return bool(((mx < 60) | ((s > 90) & (mx > 110)))[_PIE_RING].mean() > 0.75)
+
+
 def _crop(img, box):
     x, y, w, h = box
     return img[y:y + h, x:x + w]
