@@ -30,6 +30,7 @@ from .weapon_info import norm
 
 BASE = "https://stat.ink"
 DOWNLOADS = BASE + "/downloads"
+LISTING = "https://dl-stats.stats.ink/splatoon-3/battle-results-csv/"  # ダウンロードページからリンクされているファイルの一覧
 WEAPON_API = BASE + "/api/v3/weapon"
 UA = "splat-compass (personal analysis tool; https://github.com/uma-pan/splat-compass)"
 LOBBIES = ("xmatch", "bankara_challenge", "bankara_open")  # ガチルールのマッチだけ使う
@@ -50,34 +51,58 @@ def _get(url, timeout=120):
 
 
 # ---------- ダウンロード ----------
-def find_csv_links(html, page_url=DOWNLOADS):
-    """ダウンロードページから、スプラトゥーン3のバトル結果の日ごとの CSV を探す。[(日付, URL)] 新しい順。"""
+def find_csv_links(html, page_url=LISTING):
+    """ファイルの一覧のページから、日ごとのバトル結果の CSV を探す。[(日付, URL)] 新しい順。"""
     out = {}
     for href in re.findall(r'href="([^"]+?\.csv(?:\.gz)?)"', html):
-        if "battle" not in href or ("splatoon-3" not in href and "spl3" not in href and "splatoon3" not in href):
-            continue
-        m = re.search(r"(\d{4}-\d{2}-\d{2})", href)
-        if not m:
-            continue
         url = urllib.parse.urljoin(page_url, href.replace("&amp;", "&"))
-        out[m.group(1)] = url
+        if "battle-results-csv" not in url or "splatoon-3" not in url:
+            continue
+        m = re.search(r"(\d{4}-\d{2}-\d{2})", url)
+        if m:
+            out[m.group(1)] = url
     return sorted(out.items(), reverse=True)
+
+
+def _subdirs(html, page_url):
+    """一覧のページにある、年や月のフォルダへのリンク（新しい順）。"""
+    out = set()
+    for href in re.findall(r'href="([^"?]+/)"', html):
+        url = urllib.parse.urljoin(page_url, href)
+        if url.startswith(page_url) and url != page_url and re.search(r"/\d{4}(-\d{2})?/$", url):
+            out.add(url)
+    return sorted(out, reverse=True)
+
+
+def list_files(log=print):
+    """ファイルの一覧を読み、日ごとの CSV を集める。年ごと（月ごと）のフォルダに分かれていればたどる。"""
+    html = _get(LISTING).decode("utf-8", "replace")
+    pages = [(LISTING, html)]
+    links = dict(find_csv_links(html, LISTING))
+    for sub in _subdirs(html, LISTING)[:2]:  # 新しい年から2つまで
+        h2 = _get(sub).decode("utf-8", "replace")
+        pages.append((sub, h2))
+        links.update(find_csv_links(h2, sub))
+        for sub2 in _subdirs(h2, sub)[:3]:
+            h3 = _get(sub2).decode("utf-8", "replace")
+            pages.append((sub2, h3))
+            links.update(find_csv_links(h3, sub2))
+    return sorted(links.items(), reverse=True), pages
 
 
 def download(store, days=30, log=print):
     d = _dir(store)
-    log("stat.ink のダウンロードページを読んでいます…")
-    html = _get(DOWNLOADS).decode("utf-8", "replace")
-    with open(os.path.join(d, "downloads_page.html"), "w", encoding="utf-8") as f:
-        f.write(html)  # ページの形が変わったときに確かめられるよう残しておく
-    links = find_csv_links(html)
+    log("stat.ink のファイルの一覧を読んでいます…")
+    links, pages = list_files(log)
+    with open(os.path.join(d, "listing.html"), "w", encoding="utf-8") as f:
+        f.write("\n".join(f"<!-- {u} -->\n{h}" for u, h in pages))  # 形が変わったときに確かめられるよう残しておく
     if not links:
-        cands = sorted(set(re.findall(r'href="([^"]*(?:csv|zip|battle|splatoon-?3)[^"]*)"', html)))
-        log(f"ダウンロードページにあったそれらしいリンク {len(cands)} 件:")
+        cands = sorted({h for _, html in pages for h in re.findall(r'href="([^"]+)"', html)})
+        log(f"一覧にあったリンク {len(cands)} 件（先頭40件）:")
         for c in cands[:40]:
             log("  " + c)
-        raise RuntimeError("ダウンロードページに日ごとの CSV が見つかりませんでした。"
-                           f"ページを {os.path.join(d, 'downloads_page.html')} に保存したので、確かめて直します")
+        raise RuntimeError("一覧に日ごとの CSV が見つかりませんでした。"
+                           f"一覧を {os.path.join(d, 'listing.html')} に保存したので、確かめて直します")
     got = 0
     for day, url in links[:days]:
         path = os.path.join(d, "csv", f"{day}.csv")
