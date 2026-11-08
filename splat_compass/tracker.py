@@ -16,7 +16,7 @@ STABLE_SP = 0.5      # スペシャルの溜まった表示が出た・消えた
 QUIET_SEC = 1.5      # 「溜まってすぐ使った」とみなすには、前後これだけ溜まった表示が出ていないこと
 MIN_DEAD = 2.5       # 倒されてからこれより早く復活したら、表示の読み違いとみなして取り消す
 START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
-END_SECONDS = 3.0    # 試合が終わったとみなす、表示が消えている秒数
+END_SECONDS = 10.0   # 試合が終わったとみなす、表示が消えている秒数（やられて復活を待つ間のマップ表示で切れないよう長め）
 ICON_FROM, ICON_TO = 3.0, 60.0  # ブキのアイコンを切り出し始める秒と、遅くともここまでに決める秒（試合開始から）
 ICON_SHOTS = 5  # 1人あたり何枚切り出して選ぶか
 BUBBLE_DROP = 6.0  # ヤグラ・ホコのカウントが1秒に減りうる上限（これより急に減ったら読み違いとみなす。ホコを持って泳ぐと速い）
@@ -155,7 +155,9 @@ class Tracker:
                 if self.finished is not None:
                     self._set_result(self.finished, res, img)
             return
-        if known < 6:
+        if known < 6 and (is_map_screen(img) or me_respawning(img)):
+            self.off_since = None  # マップを開いている・復活待ち。試合は続いている
+        elif known < 6:
             if self.off_since is None:
                 self.off_since = t
             elif t - self.off_since >= END_SECONDS:
