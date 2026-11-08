@@ -86,19 +86,32 @@ def features(elapsed, l, r, lf, rf, slots, ctx=(None, None, 0, 0), pen=(0, 0)):
             (pen[0] or 0) / 100, (pen[1] or 0) / 100]
 
 
+def penalties_at(timeline, index):
+    """指定の行までに読めた最新のペナルティを、チームごとに返す。"""
+    left = right = None
+    for i in range(index, -1, -1):
+        row = timeline[i]
+        if len(row) < 7:
+            continue
+        if left is None:
+            left = row[5]
+        if right is None:
+            right = row[6]
+        if left is not None and right is not None:
+            break
+    return left or 0, right or 0
+
+
 def rows(m):
     """1試合を (時刻, 特徴量) の並びにする。"""
     at = _states_at(m)
     tl = m.get("timeline") or []
     evs = sorted(m["events"], key=lambda e: e[0])
     out = []
-    last_pen = [0, 0]
-    for t, l, r, lf, rf, *rest in tl:
+    for i, (t, l, r, lf, rf, *_) in enumerate(tl):
         st = at(t)
-        if len(rest) >= 2:  # ペナルティが読めなかった秒は直前の値を使う
-            last_pen = [rest[k] if rest[k] is not None else last_pen[k] for k in (0, 1)]
         out.append((t, features(t - m["video_start"], l, r, lf, rf, [st[s] for s in SLOTS],
-                                context(tl, evs, t), tuple(last_pen))))
+                                context(tl, evs, t), penalties_at(tl, i))))
     return out
 
 

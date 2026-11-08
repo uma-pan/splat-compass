@@ -124,13 +124,13 @@ def win_prob(tr, t, models):
         return None, None
     evs = [e.row() for e in m.events]
     ctx = winprob.context(m.timeline, evs, t)
-    pen = (last[5], last[6]) if len(last) >= 7 else (0, 0)
     if m.rule == "ガチエリア" and models.get("area") is not None:
+        pen = winprob.penalties_at(m.timeline, len(m.timeline) - 1)
         f = winprob.features(t - m.start, last[1], last[2], last[3], last[4], tr.cur, ctx, pen)
         return float(models["area"].predict(np.array([f]))[0]), "エリア"
     # ルールが読めなかった試合も、カウントが読めていれば目安を出す
     if (m.rule in winprob.SIMPLE_RULES or m.rule is None) and models.get("simple") is not None:
-        f = winprob.features(t - m.start, last[1], last[2], 0, 0, tr.cur, ctx, pen)
+        f = winprob.features(t - m.start, last[1], last[2], 0, 0, tr.cur, ctx)
         x = np.array([[f[c] for c in winprob.SIMPLE_COLS]])
         return float(models["simple"].predict(x)[0]), "目安"
     return None, None
