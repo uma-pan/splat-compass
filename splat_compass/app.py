@@ -245,6 +245,7 @@ body.compact .logs { max-height:120px; }
 </style>"""
 
 APP_JS = """<script>
+const $ = id => document.getElementById(id);
 let since = 0, version = window.summaryVersion, inMatch = false;
 let historyPage = 0, historyRequest = 0, detailRequest = 0, activeFile = null, lastSaved = null;
 let clipJobs = {};
@@ -438,7 +439,6 @@ async function startCamera(i) {
   const r = await fetch("/api/start_camera", { method: "POST", body: JSON.stringify({ index: i }) });
   if (!r.ok) alert(await r.text());
 }
-const $ = id => document.getElementById(id);
 const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 
 function setCompact(on) {
