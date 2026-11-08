@@ -623,7 +623,8 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
             body = f'<p class="muted">この集計を作れませんでした: {ESC(str(e))}</p>'
         bodies += f'<div class="tab{" on" if i == 0 else ""}" id="{k}">{body}</div>'
     view = store.view()
-    sub = f"{view + ' ' if view else ''}{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点"
+    from . import __version__
+    sub = f"{view + ' ' if view else ''}{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点 ・ 版 {__version__}"
     return PAGE.format(subtitle=ESC(sub), tabs=nav, bodies=bodies, head=head, script=script)
 
 

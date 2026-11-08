@@ -95,16 +95,20 @@ def camera_frames(index=0, fps=5):
     began = time.time()
     interval = 1.0 / fps
     nxt = began
-    while reader.ok:
-        now = time.time()
-        if now < nxt:
-            time.sleep(nxt - now)
-        nxt += interval
-        f = reader.get()
-        if f is None:
-            continue
-        yield time.time() - began, _fit(f)
-    cap.release()
+    try:
+        while reader.ok:
+            now = time.time()
+            if now < nxt:
+                time.sleep(nxt - now)
+            nxt += interval
+            f = reader.get()
+            if f is None:
+                continue
+            yield time.time() - began, _fit(f)
+    finally:  # 読むのをやめたら（カメラを選び直すときなど）、カメラを手放す
+        reader.ok = False
+        reader.join(timeout=2)
+        cap.release()
 
 
 def list_cameras(max_index=6, snapshot_dir=None):

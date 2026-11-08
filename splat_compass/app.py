@@ -112,6 +112,7 @@ LIVE_HTML = """
 <div class="modebar">この試合の記録: <button class="btn mode" data-mode="ガチ" onclick="setConfig({mode:'ガチ'})">ガチ</button>
   <button class="btn mode" data-mode="エンジョイ" onclick="setConfig({mode:'エンジョイ'})">エンジョイ</button>
   <span class="muted">（本気でやる記録と、そうでない記録を分けて集計します）</span></div>
+<button id="recam" class="btn" style="float:right" onclick="recam()">カメラを選び直す</button>
 <label class="muted" style="display:block;margin-bottom:8px"><input type="checkbox" id="sound" onchange="try{localStorage.setItem('sc-sound', this.checked ? '1' : '0')}catch(e){}"> 通知で音を鳴らす</label>
 <div id="reloadbar" class="reloadbar">まとめが新しくなりました <button class="btn" onclick="location.reload()">読み直す</button></div>
 <div id="campick" class="card campick"><h3>読み取るカメラ</h3>
@@ -200,6 +201,11 @@ body.compact .logs { max-height:120px; }
 
 APP_JS = """<script>
 let since = 0, version = null, inMatch = false, lastShown = null;
+async function recam() {
+  if (inMatch && !confirm("試合の途中です。読むのをやめると、この試合は途中までで保存されます。よいですか？")) return;
+  await fetch("/api/stop_camera", { method: "POST", body: "{}" });
+  findCameras();
+}
 async function setConfig(c) {
   const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
   if (!r.ok) { alert(await r.text()); return; }
@@ -320,6 +326,7 @@ function showState(d) {
     $("matchinfo").innerHTML = `${st.rule || "ルール不明"}${st.stage ? "　" + st.stage : ""}　${st.clock ? (st.clock.startsWith("延長") ? st.clock : "残り " + st.clock) : mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
   }
   $("campick").classList.toggle("on", !d.reading && d.can_start);
+  $("recam").style.display = d.reading && d.can_start ? "" : "none";
   document.querySelectorAll(".btn.mode").forEach(b => b.classList.toggle("on", b.dataset.mode === d.mode));
   if ($("viewsel") && document.activeElement !== $("viewsel")) $("viewsel").value = d.view || "すべて";
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
@@ -606,6 +613,11 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                     from . import weapon_info
                     weapon_info.set_override(store, str(body.get("name", "")), body["field"], str(body.get("value", "")).strip())
                     self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/stop_camera":
+                    if start_camera is None or not hasattr(start_camera, "stop"):
+                        raise ValueError("ここからは止められません")
+                    start_camera.stop()
+                    self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/start_camera":
                     err = start_camera(int(body.get("index", 0))) if start_camera else "ここからは始められません"
                     if err:
@@ -770,18 +782,39 @@ def main():
     st.mode, st.view = store.mode(), store.view() or "すべて"
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
-    stop = threading.Event()
+    stop = threading.Event()  # アプリを閉じるとき
     cmds = queue.Queue()
     lock = threading.Lock()
+    run_stop = {"ev": threading.Event(), "th": None}
 
     def begin(frames, source):
+        ev = threading.Event()
+        run_stop["ev"] = ev
+
+        class Both:  # アプリを閉じたときか、カメラを選び直すときに止める
+            def is_set(self):
+                return stop.is_set() or ev.is_set()
+
         def run():
             try:
-                live.worker(frames, store, source, q, stop, cmds)
+                live.worker(frames, store, source, q, Both(), cmds)
             finally:
+                close = getattr(frames, "close", None)
+                if close:
+                    close()
                 q.put(("end", None))
         st.reading = True
-        threading.Thread(target=run, daemon=True).start()
+        th = threading.Thread(target=run, daemon=True)
+        run_stop["th"] = th
+        th.start()
+
+    def stop_camera():
+        """今のカメラで読むのをやめる（カメラを選び直すため）。"""
+        run_stop["ev"].set()
+        th = run_stop["th"]
+        if th is not None:
+            th.join(timeout=5)
+        return None
 
     def start_camera(index):
         """画面で選んだカメラで読み始める。選んだ番号は次から自動で使う。"""
@@ -812,6 +845,7 @@ def main():
             err = start_camera(int(cam))
             if err:
                 st._push(st.logs, err + "。カメラを選び直してください")
+    start_camera.stop = stop_camera
     url = serve(store, lambda: store.load_config().get("video_dir"), st, a.port, cmds, start_camera)
     open_window(url)
     stop.set()

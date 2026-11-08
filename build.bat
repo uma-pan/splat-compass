@@ -11,9 +11,11 @@ python -m PyInstaller --noconfirm --clean --name splat-compass --windowed ^
   --collect-all webview ^
   launcher.py
 if errorlevel 1 goto fail
-powershell -NoProfile -Command "Compress-Archive -Force -Path dist\splat-compass -DestinationPath dist\splat-compass.zip"
+copy /y "はじめに.txt" "dist\splat-compass\はじめに.txt" >nul
+for /f %%v in ('python -c "import splat_compass; print(splat_compass.__version__)"') do set VER=%%v
+powershell -NoProfile -Command "Compress-Archive -Force -Path dist\splat-compass -DestinationPath dist\splat-compass-%VER%.zip"
 echo.
-echo できました: dist\splat-compass.zip （これを配ります）
+echo できました: dist\splat-compass-%VER%.zip （これを配ります）
 pause
 exit /b 0
 :fail
