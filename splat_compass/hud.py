@@ -172,8 +172,25 @@ def hud_visible(img):
     x, y, w, h = TIMER_BOX
     b = img[y:y + h, x:x + w]
     dark = (b.max(axis=2) < 70).mean()
-    bright = (b.max(axis=2) > 200).mean()  # 白い数字のほか、残り1分の黄色い数字や「延長中!」も含める
-    return bool(dark > 0.35 and 0.05 < bright < 0.6)
+    bright = (b.max(axis=2) > 200).mean()  # 白い数字のほか、残り1分の黄色い数字も含める
+    return bool(dark > 0.35 and 0.05 < bright < 0.6) or overtime_visible(img)
+
+
+def overtime_visible(img):
+    """延長戦の「延長中!」の表示が出ているか。黒と赤に点滅する地に、橙の文字が出る。
+    地が赤くなると黒い地の割合が減り、上の残り時間の判定から外れるので別に見る。"""
+    x, y, w, h = TIMER_BOX
+    b = img[y:y + h, x:x + w].astype(np.int16)
+    r, g, bl = b[..., 0], b[..., 1], b[..., 2]
+    om = (r > 200) & (g > 60) & (g < 190) & (bl < 110) & (r - g > 60)
+    orange = om.mean()
+    # 文字は横いっぱいに並ぶので、左・中・右のどこにも橙がある（景色の橙い物が片側にあるだけのものを除く）
+    thirds = [om[:, i * w // 3:(i + 1) * w // 3].mean() for i in range(3)]
+    if min(thirds) < 0.08:
+        return False
+    # 黒か赤紫の地（緑が少なく、青が赤を大きく上回らない）。橙のインクや青のインクはここに入らない
+    ground = ((g < 65) & (bl < r + 25)).mean()
+    return bool(0.12 < orange < 0.4 and ground > 0.5)
 
 
 # 自分が相手を倒したときに画面の下に出る「〇〇 をたおした!」
