@@ -170,6 +170,11 @@ APP_CSS = """<style>
 .input-state strong { background:#e5edf9; border-radius:5px; padding:4px 8px; }
 .recording-settings { margin-bottom:12px; }
 .recording-settings input { width:min(65%, 460px); margin:4px; }
+.clip-video { display:block; width:100%; max-width:720px; }
+.clip-video[hidden] { display:none; }
+.clip-actions { border:0; padding:0; margin:0; }
+.clip-actions legend { margin-bottom:6px; }
+.clip-item { margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
 .lm-title { font-size:20px; margin:6px 0 10px; }
 .lm-stage { margin:-4px 0 10px; } .lm-stage img { vertical-align:middle; background:#333; border-radius:4px; }
 .lm-nums { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
@@ -240,9 +245,36 @@ async function recam() {
   await fetch("/api/stop_camera", { method: "POST", body: "{}" });
   findCameras();
 }
-async function makeClips(file, kind) {
-  const r = await fetch("/api/clips", { method: "POST", body: JSON.stringify({ file: file, kind: kind }) });
-  if (!r.ok) alert(await r.text());
+async function makeClips(button, file, kind) {
+  const section = button.closest(".clip-exports");
+  const status = section.querySelector(".clip-status");
+  const actions = button.closest("fieldset");
+  actions.disabled = true;
+  status.textContent = button.textContent + "を作成しています…";
+  try {
+    const r = await fetch("/api/clips", { method: "POST", body: JSON.stringify({ file, kind }) });
+    const body = await r.text();
+    if (!r.ok) throw new Error(body);
+    section.querySelector(".clip-list").innerHTML = body;
+    status.textContent = "書き出しが完了しました。";
+  } catch (e) {
+    status.textContent = e.message || "書き出しの状態を確認できませんでした。";
+  } finally {
+    actions.disabled = false;
+  }
+}
+function playExport(button) {
+  const item = button.closest(".clip-item");
+  const status = item.querySelector('[role="status"]');
+  const video = item.querySelector("video");
+  const fail = () => {
+    video.hidden = true;
+    status.textContent = "この動画はアプリ内で再生できません。「ファイルを保存」で外部プレーヤーから開くか、動画を作り直してください。";
+  };
+  status.textContent = "読み込んでいます…";
+  video.onerror = fail;
+  if (!video.src || video.error) video.src = button.dataset.src;
+  video.play().then(() => { video.hidden = false; status.textContent = ""; }).catch(fail);
 }
 async function setConfig(c) {
   const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
@@ -329,14 +361,18 @@ function openHistory(file) {
 async function refreshMatch(file) {
   await Promise.all([refreshSummary(), loadHistory(), ...(activeFile === file ? [loadLast(file)] : [])]);
 }
-let lmStop = null;
 function lmPlay(src, a, b, label) {
-  const v = $("lv"); if (!v) return;
-  if (v.getAttribute("src") !== src) v.setAttribute("src", src);
-  const go = () => { v.currentTime = Math.max(0, a); v.play(); };
-  if (v.readyState >= 1) go(); else v.addEventListener("loadedmetadata", go, { once: true });
-  lmStop = b; $("lvnow").textContent = label;
-  if (!v._lm) { v._lm = true; v.addEventListener("timeupdate", () => { if (lmStop !== null && v.currentTime >= lmStop) { v.pause(); lmStop = null; } }); }
+  const video = $("lv"), status = $("lvnow");
+  if (!video) return;
+  const fail = () => { video.hidden = true; status.textContent = "元の録画をアプリ内で再生できませんでした。"; };
+  const seek = () => { video.currentTime = Math.max(0, a); video.onloadedmetadata = null; };
+  status.textContent = label + " · 読み込んでいます…";
+  $("scene-player").scrollIntoView({block: "nearest"});
+  video.onerror = fail;
+  video.ontimeupdate = () => { if (video.currentTime >= b) { video.pause(); video.ontimeupdate = null; } };
+  if (video.getAttribute("src") !== src || video.error) video.src = src;
+  if (video.readyState >= 1) seek(); else video.onloadedmetadata = seek;
+  video.play().then(() => { video.hidden = false; status.textContent = label; }).catch(fail);
 }
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest('nav button[data-tab="last"]');
@@ -621,6 +657,7 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
     root = pathlib.Path(store.root).resolve()
     cache = {"version": None, "html": None}
     cache_lock = threading.Lock()
+    clip_jobs = set()
 
     def link(path):
         p = pathlib.Path(path).resolve()
@@ -797,17 +834,30 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         raise ValueError("種類が違います")
                     m = store.load(os.path.join(store.mdir, os.path.basename(str(body["file"]))))
 
-                    def job():
-                        def log(text):
-                            with st.lock:
-                                st._push(st.logs, text)
-                        try:
-                            if not clips.make(store, [m], kind, get_video_dir(), log):
-                                log(f"{clips.KINDS[kind]}がありませんでした")
-                        except Exception as e:
-                            log(f"動画にまとめられませんでした: {e}")
-                    threading.Thread(target=job, daemon=True).start()
-                    self._send(200, b"ok", "text/plain")
+                    with st.lock:
+                        busy = m["_file"] in clip_jobs
+                        if not busy:
+                            clip_jobs.add(m["_file"])
+                    if busy:
+                        self._send(409, "この試合の動画を作成中です。".encode("utf-8"), "text/plain; charset=utf-8")
+                        return
+
+                    def log(text):
+                        with st.lock:
+                            st._push(st.logs, text)
+
+                    try:
+                        path = clips.make(store, [m], kind, get_video_dir(), log)
+                        if path:
+                            result = lastmatch.exported_clips(store, m, link)
+                            self._send(200, result.encode("utf-8"), "text/html; charset=utf-8")
+                        else:
+                            message = f"{clips.KINDS[kind]}に該当する録画を見つけられませんでした。"
+                            log(message)
+                            self._send(422, message.encode("utf-8"), "text/plain; charset=utf-8")
+                    finally:
+                        with st.lock:
+                            clip_jobs.discard(m["_file"])
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
                     f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None
@@ -833,6 +883,8 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                     self._send(200, b"ok", "text/plain")
                 else:
                     self._send(404, b"not found", "text/plain")
+            except ConnectionError:
+                pass
             except Exception as e:
                 self._send(500, f"{e}".encode("utf-8"), "text/plain; charset=utf-8")
 
@@ -929,6 +981,7 @@ def open_window(url):
                 pass
 
     try:
+        webview.settings["ALLOW_DOWNLOADS"] = True  # 書き出した動画の保存リンクを使えるようにする
         holder["w"] = webview.create_window("splat-compass", url, width=FULL_SIZE[0], height=FULL_SIZE[1], js_api=Api())
         webview.start()
     except Exception as e:

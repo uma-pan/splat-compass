@@ -112,6 +112,18 @@ def _chart(m, pr, me_events, kills, W=720, H=200):
     return f'<svg viewBox="0 0 {W} {H}" style="width:100%;max-width:{W}px;background:#fff;border-radius:8px">{"".join(parts)}</svg>{legend}'
 
 
+def exported_clips(store, m, link):
+    items = []
+    for name, path in clips.existing(store, m):
+        url = ESC(f"{link(path)}?v={os.stat(path).st_mtime_ns}")
+        ext = "WebM" if path.endswith(".webm") else "MP4"
+        items.append(f'<div class="clip-item"><strong>{ESC(name)}</strong> <span class="muted">{ext}</span> '
+                     f'<button class="btn" type="button" data-src="{url}" onclick="playExport(this)">アプリ内で再生</button> '
+                     f'<a href="{url}" download="{ESC(os.path.basename(path))}">ファイルを保存</a>'
+                     '<p class="muted" role="status"></p><video class="clip-video" controls preload="none" hidden></video></div>')
+    return "".join(items) or '<p class="muted">書き出した動画はここに表示されます。</p>'
+
+
 def html_for(store, link, video_dir=None, file=None):
     ms = saved_matches(store)
     if not ms:
@@ -206,19 +218,20 @@ def html_for(store, link, video_dir=None, file=None):
     loc = clips.locate(m, video_dir)  # 録画（カメラから読んだ試合は、同じ時間の OBS の録画）
     if loc is not None:
         src, off = link(loc[0]), loc[1]
-        made = clips.existing(store, m)
-        vids = "".join(f'<div style="margin-top:8px"><div class="muted">{ESC(n)}</div>'
-                       f'<video controls preload="none" src="{link(pth)}" style="width:100%;max-width:720px"></video></div>'
-                       for n, pth in made)
-        btns = "".join(f'<button class="btn" onclick="makeClips({ESC(json.dumps(m["_file"]))}, \'{k}\')">{n}</button> '
-                       for k, n in clips.KINDS.items())
-        out.append('<div class="card wide"><video id="lv" controls preload="none" style="width:100%;max-width:720px"></video>'
-                   '<div id="lvnow" class="muted">「再生」を押すと、その場面の少し前から流します</div>'
-                   f'<div style="margin-top:10px">動画にまとめる: {btns}<span class="muted">（できたら記録の欄に出ます。このタブを開き直すと見られます）</span></div>'
-                   f'{vids}</div>')
+        out.append('<div class="card wide" id="scene-player"><h3>元の録画から場面を再生</h3>'
+                   '<p id="lvnow" class="muted" role="status">下の場面一覧で「再生」を押すと、ここで流れます。</p>'
+                   '<video class="clip-video" id="lv" controls preload="none" hidden></video></div>')
     else:
         out.append('<div class="card wide"><h3>試合の録画</h3><p class="muted">この試合に対応する録画が見つかりません。</p>'
                    '<button class="btn" onclick="document.querySelector(\'nav button[data-tab=scenes]\').click()">録画フォルダの設定を開く</button></div>')
+
+    btns = ""
+    if loc is not None:
+        btns = "".join(f'<button class="btn" type="button" onclick="makeClips(this, {file_arg}, \'{k}\')">{n}</button> '
+                       for k, n in clips.KINDS.items())
+        btns = f'<fieldset class="clip-actions"><legend>動画にまとめる場面</legend>{btns}</fieldset>'
+    out.append(f'<div class="card wide clip-exports"><h3>書き出した動画</h3>{btns}'
+               f'<p class="muted clip-status" role="status"></p><div class="clip-list">{exported_clips(store, m, link)}</div></div>')
 
     def play_btn(t_cam, label):
         """t_cam: 読み取ったときの時刻（試合開始が m["video_start"]）。録画の時刻に直して再生する。"""

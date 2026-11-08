@@ -6,7 +6,7 @@
 
 録画から読んだ試合はその録画を使う。カメラから読んだ試合も、同じ時間に OBS で録画していれば
 （ファイル名が OBS の既定の「2026-11-08 20-05-00.mp4」の形なら）、その録画から切り出せる。
-ffmpeg があれば音つきで、無ければ OpenCV で映像だけを書き出す。
+ffmpeg があれば MP4、無ければ OpenCV で音なしの WebM を書き出す。
 
   python -m splat_compass.clips                     … 一番新しい試合の倒された場面
   python -m splat_compass.clips --kind kills --last 10 … 新しい10試合の倒した場面をまとめて1本に
@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 
 from . import clock
 from .storage import Store
@@ -120,8 +121,19 @@ def scenes(m, kind, store=None):
 
 
 def write(segments, out_path, log=print):
-    """segments: [(録画のパス, 始まりの秒, 終わりの秒)] を順につないで out_path に書く。"""
+    """場面を順につなぎ、完成したファイルのパスを返す。"""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=os.path.dirname(out_path)) as tmp:
+        staged = _encode(segments, os.path.join(tmp, "clip.mp4"), log)
+        if staged is None:
+            return None
+        extension = os.path.splitext(staged)[1]
+        output = os.path.splitext(out_path)[0] + extension
+        os.replace(staged, output)
+        return output
+
+
+def _encode(segments, out_path, log):
     ff = shutil.which("ffmpeg")
     if ff:
         for audio in (True, False):
@@ -134,36 +146,52 @@ def write(segments, out_path, log=print):
             fc = f"{ins}concat=n={n}:v=1:a={1 if audio else 0}[c]" + ("[a]" if audio else "") + ";[c]scale=1280:-2,fps=30[v]"
             cmd += ["-filter_complex", fc, "-map", "[v]"] + (["-map", "[a]"] if audio else []) + \
                    ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p"] + \
-                   (["-c:a", "aac", "-b:a", "128k"] if audio else []) + [out_path]
+                   (["-c:a", "aac", "-b:a", "128k"] if audio else []) + ["-movflags", "+faststart", out_path]
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                creationflags=0x08000000 if os.name == "nt" else 0)
-            if r.returncode == 0:
+            if r.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
                 return out_path
         log(f"ffmpeg で書き出せなかったので、映像だけで書き出します: {r.stderr[-200:]}")
+    return _encode_video_only(segments, out_path, log)
+
+
+def _encode_video_only(segments, out_path, log):
     import cv2  # ffmpeg が無いとき: 映像だけ（音なし）
+
     wr = None
-    for p, s, e in segments:
-        cap = cv2.VideoCapture(p)
-        fps = cap.get(cv2.CAP_PROP_FPS) or 60
-        step = max(1, round(fps / 30))  # 30コマ/秒にして軽くする
-        cap.set(cv2.CAP_PROP_POS_MSEC, s * 1000)
-        n = int((e - s) * fps)
-        for i in range(n):
-            ok = cap.grab()
-            if not ok:
-                break
-            if i % step:
-                continue
-            ok, f = cap.retrieve()
-            f = cv2.resize(f, (1280, 720), interpolation=cv2.INTER_AREA)
-            if wr is None:
-                wr = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps / step, (1280, 720))
-            wr.write(f)
-        cap.release()
-    if wr is not None:
-        wr.release()
-        return out_path
-    return None
+    output = os.path.splitext(out_path)[0] + ".webm"
+    size = (1280, 720)
+    try:
+        for p, s, e in segments:
+            cap = cv2.VideoCapture(p)
+            try:
+                fps = cap.get(cv2.CAP_PROP_FPS) or 60
+                step = max(1, round(fps / 30))
+                cap.set(cv2.CAP_PROP_POS_MSEC, s * 1000)
+                for i in range(int((e - s) * fps)):
+                    if not cap.grab():
+                        break
+                    if i % step:
+                        continue
+                    ok, frame = cap.retrieve()
+                    if not ok:
+                        continue
+                    if wr is None:
+                        wr = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*"VP80"), fps / step, size)
+                        if not wr.isOpened():
+                            wr.release()
+                            output = out_path
+                            wr = cv2.VideoWriter(output, cv2.VideoWriter_fourcc(*"mp4v"), fps / step, size)
+                            if not wr.isOpened():
+                                raise RuntimeError("動画を書き出せませんでした")
+                            log("WebM で書き出せないため、外部プレーヤー向けの MP4 で保存します")
+                    wr.write(cv2.resize(frame, size, interpolation=cv2.INTER_AREA))
+            finally:
+                cap.release()
+    finally:
+        if wr is not None:
+            wr.release()
+    return output if wr is not None and os.path.isfile(output) and os.path.getsize(output) else None
 
 
 def clip_dir(store):
@@ -198,10 +226,11 @@ def existing(store, m):
     """その試合について作った動画 [(種類の名前, パス)]"""
     stem = os.path.splitext(m["_file"])[0]
     out = []
-    for k, name in KINDS.items():
-        p = os.path.join(clip_dir(store), f"{stem}_{name}.mp4")
-        if os.path.exists(p):
-            out.append((name, p))
+    for name in KINDS.values():
+        base = os.path.join(clip_dir(store), f"{stem}_{name}")
+        files = [base + ext for ext in (".mp4", ".webm") if os.path.isfile(base + ext)]
+        if files:
+            out.append((name, max(files, key=os.path.getmtime)))
     return out
 
 
