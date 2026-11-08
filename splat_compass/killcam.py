@@ -119,14 +119,18 @@ def cluster_all(store):
     return labels, groups
 
 
+_ASSIGNED = {}  # 画像ごとに、どのまとまりか（まとまりの見本が変わったら覚え直す）
+
+
 def name_of(store, image_path, labels=None, protos=None):
     if labels is None:
         labels, protos = load_labels(store)
-    im = cv2.imdecode(np.fromfile(image_path, np.uint8), cv2.IMREAD_COLOR)
-    m = text_mask(im[..., ::-1]) if im is not None else None
-    if m is None:
-        return None
-    k = assign(m, protos)
+    key = (image_path, len(protos), tuple(sorted(protos))[:3])
+    if key not in _ASSIGNED:
+        im = cv2.imdecode(np.fromfile(image_path, np.uint8), cv2.IMREAD_COLOR)
+        m = text_mask(im[..., ::-1]) if im is not None else None
+        _ASSIGNED[key] = assign(m, protos) if m is not None else None
+    k = _ASSIGNED[key]
     return labels.get(k) if k else None
 
 

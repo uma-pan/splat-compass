@@ -316,6 +316,7 @@ def section_killers(store, ms):
     colors = {"メイン": "#3d7bd9", "サブ": "#e0a020", "スペシャル": "#c0392b"}
     body = card("何で倒されたか", bars(kinds, lambda v: f"{v}回", "#666")
                 + f'<p class="muted">倒された画面 {total}回のうち、名前が分かったもの {total - unknown}回</p>')
+    body += killer_rate_card(store, ms, labels, protos)
     for k in ("メイン", "スペシャル", "サブ"):
         items = sorted(by_kind.get(k, []), key=lambda x: -x[1])[:12]
         if items:
@@ -324,6 +325,49 @@ def section_killers(store, ms):
         body += card("名前の無いまとまり", f'<p>{unknown}回分の名前がまだ分かりません。'
                      '<code>python -m splat_compass.killcam</code> で一覧を作り、killcam_labels.json に名前を書いてください。</p>')
     return '<div class="grid2">' + body + "</div>"
+
+
+def killer_rate_card(store, ms, labels, protos):
+    """相手にそのブキ（サブ・スペシャルはそれを持つブキ）がいた試合の数と、その試合で倒された回数。
+    倒された回数だけだと、よく当たるブキほど多くなるので、1試合あたりで比べる。"""
+    from .weapon_info import Info
+    info = Info(store)
+    namer = weapons.shared_namer(store)
+    met = defaultdict(int)     # 相手にいた試合の数
+    killed = defaultdict(int)  # その試合で倒された回数
+    n_ms = 0
+    for m in ms:
+        if not m.get("killed_by") or not m.get("weapon_icons"):
+            continue
+        names = weapons.weapons_of(store, m, namer)
+        if not names:
+            continue
+        enemy = [names[k] for k in range(4, 8) if names[k]]  # 右の4人が相手
+        if len(enemy) < 3:  # 相手のブキがほとんど読めていない試合は使わない
+            continue
+        n_ms += 1
+        have = set(enemy)
+        for w in enemy:
+            d = info.get(w)
+            have |= {x for x in (d["サブ"], d["スペシャル"]) if x}
+        for x in have:
+            met[x] += 1
+        for kc in m["killed_by"]:
+            n = killcam.name_of(store, os.path.join(store.root, "killcam", kc["image"]), labels, protos)
+            if n and n in have:
+                killed[n] += 1
+    rows = []
+    for x, c in met.items():
+        if c < 3 or not killed.get(x):
+            continue
+        rows.append([ESC(x), ESC(killcam.kind_of(x) or ""), f"{c}試合", f"{killed[x]}回", num(killed[x] / c, 2)])
+    if not rows:
+        return ""
+    rows.sort(key=lambda r: -float(r[4]))
+    return card("当たった試合あたりに倒された回数",
+                table(["倒されたもの", "種類", "相手にいた試合", "倒された回数", "1試合あたり"], rows)
+                + f'<p class="muted">相手のブキが読めた {n_ms}試合から。サブ・スペシャルは、それを持つブキが相手にいた試合を数えています。'
+                  '3試合以上当たったものだけ出しています。見出しを押すと並べ替えられます。</p>', wide=True)
 
 
 def section_statink(store, ms, st):
@@ -528,6 +572,7 @@ header {{ background:#1f2937; color:#fff; padding:14px 22px; display:flex; align
 header h1 {{ font-size:18px; margin:0; }} header span {{ color:#cbd5e1; font-size:13px; }}
 nav {{ background:#fff; border-bottom:1px solid var(--line); padding:0 16px; display:flex; gap:4px; position:sticky; top:0; z-index:5; }}
 nav button {{ border:0; background:none; padding:12px 14px; font-size:14px; cursor:pointer; color:var(--muted); border-bottom:3px solid transparent; font-family:inherit; }}
+th {{ cursor:pointer; user-select:none; }} th:hover {{ color:var(--accent); }}
 nav button.on {{ color:var(--ink); border-bottom-color:var(--accent); font-weight:bold; }}
 main {{ max-width:1180px; margin:0 auto; padding:16px; }}
 .tab {{ display:none; }} .tab.on {{ display:block; }}
@@ -589,6 +634,37 @@ function play(src, a, b, label) {{
   stopAt = b; document.getElementById("now").textContent = label;
 }}
 if (v) v.addEventListener("timeupdate", () => {{ if (stopAt !== null && v.currentTime >= stopAt) {{ v.pause(); stopAt = null; }} }});
+// 表の見出しを押すと、その列で並べ替える（もう一度押すと逆順）。数字・割合・時刻は数として比べる
+function cellKey(td) {{
+  const t = (td ? td.textContent : "").trim();
+  let m = t.match(/^(\\d+):(\\d\\d)/);
+  if (m) return +m[1] * 60 + +m[2];
+  m = t.match(/-?\\d+(\\.\\d+)?/);
+  if (m) return parseFloat(m[0]);
+  return t === "—" || t === "" ? null : t;
+}}
+document.addEventListener("click", e => {{
+  const th = e.target.closest && e.target.closest("th");
+  if (!th) return;
+  const tr = th.parentElement, table = th.closest("table");
+  if (!table || !tr) return;
+  const col = Array.from(tr.children).indexOf(th);
+  const body = table.tBodies.length && table.tBodies[0] !== tr.parentElement ? table.tBodies[0] : tr.parentElement;
+  const rows = Array.from(body.rows).filter(r => r !== tr && r.querySelector("td"));
+  if (rows.length < 2) return;
+  const dir = th.dataset.dir === "desc" ? "asc" : "desc";
+  tr.querySelectorAll("th").forEach(x => {{ delete x.dataset.dir; x.textContent = x.textContent.replace(/ [▲▼]$/, ""); }});
+  th.dataset.dir = dir; th.textContent += dir === "desc" ? " ▼" : " ▲";
+  rows.sort((a, b) => {{
+    const x = cellKey(a.children[col]), y = cellKey(b.children[col]);
+    if (x === null && y === null) return 0;
+    if (x === null) return 1;
+    if (y === null) return -1;
+    const c = (typeof x === "number" && typeof y === "number") ? x - y : String(x).localeCompare(String(y), "ja");
+    return dir === "desc" ? -c : c;
+  }});
+  rows.forEach(r => body.appendChild(r));
+}});
 document.querySelectorAll(".filters input").forEach(cb => cb.addEventListener("change", () => {{
   document.querySelectorAll(".scene[data-kind='" + cb.value + "']").forEach(el => el.style.display = cb.checked ? "" : "none");
 }}));
