@@ -101,9 +101,10 @@ def feature(icon):
 
 # ---------- 名前 ----------
 def load_labels(store):
+    from .weapon_info import canon
     try:
         with open(os.path.join(store.root, "weapon_labels.json"), encoding="utf-8") as f:
-            return json.load(f)
+            return {k: canon(v) for k, v in json.load(f).items()}  # 名前の書き方をそろえて読む
     except (OSError, ValueError):
         return {}
 
@@ -153,7 +154,8 @@ def bundled_refs():
     if "v" not in _REFS:
         try:
             d = np.load(REFS_FILE, allow_pickle=False)
-            _REFS["v"] = list(zip(d["F"].astype(np.float32), [str(x) for x in d["names"]]))
+            from .weapon_info import canon
+            _REFS["v"] = list(zip(d["F"].astype(np.float32), [canon(str(x)) for x in d["names"]]))
         except (OSError, KeyError, ValueError):
             _REFS["v"] = []
     return _REFS["v"]
@@ -246,9 +248,10 @@ def weapons_of(store, m, namer=None):
 
 def set_label(store, key, name):
     """1枚の絵の名前を手で決める（空なら手で付けた名前を消す）。次から名前を決める見本に使われる。"""
+    from .weapon_info import canon
     labels = load_labels(store)
     if name:
-        labels[key] = name
+        labels[key] = canon(name)
     else:
         labels.pop(key, None)
     save_labels(store, labels)

@@ -73,6 +73,8 @@ def load_labels(store):
     try:
         with open(os.path.join(store.root, "killcam_labels.json"), encoding="utf-8") as f:
             labels = json.load(f)
+        from .weapon_info import canon
+        labels = {k: canon(v) for k, v in labels.items()}  # 名前の書き方をそろえて読む
     except (OSError, ValueError):
         labels = {}
     p = os.path.join(store.root, "killcam_clusters.npz")

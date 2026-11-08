@@ -119,6 +119,22 @@ ALIASES = {"スプラシュータ": "スプラシューター", "スパッタリ
            "リッター4Kスコープ": "4Kスコープ", "リッター4Kスコープカスタム": "4Kスコープカスタム"}
 
 
+# レプリカは元のブキと同じサブ・スペシャル（ここに無いものは、画面のブキの情報の表で直せる）
+REPLICA_OF = {"オーダーシューターレプリカ": "スプラシューター", "オクタシューターレプリカ": "スプラシューター",
+              "オーダーローラーレプリカ": "スプラローラー", "オーダーブラシレプリカ": "ホクサイ",
+              "オーダーチャージャーレプリカ": "スプラチャージャー", "オーダースロッシャーレプリカ": "バケットスロッシャー",
+              "オーダースピナーレプリカ": "バレルスピナー", "オーダーマニューバーレプリカ": "スプラマニューバー"}
+
+
+def canon(name):
+    """表示や記録に使う名前の書き方をそろえる。「〇〇レプリカ」は「〇〇 レプリカ」（公式の書き方）にする。"""
+    import re
+    if not isinstance(name, str):
+        return name
+    n = name.strip()
+    return re.sub(r"\s*レプリカ$", " レプリカ", n) if n.endswith("レプリカ") and len(n) > 4 else n
+
+
 def norm(name):
     n = (name or "").replace(" ", "").replace("　", "")
     if n.startswith(("52ガロン", "96ガロン")):  # 頭の「.」を付け忘れた名前
@@ -167,8 +183,8 @@ class Info:
     def get(self, name):
         n = norm(name)
         base, cls, rng = main_of(n)
-        sub, sp = KITS.get(n, (None, None))
-        d = {"名前": n, "メイン": base, "種類": cls, "射程": rng, "サブ": sub, "スペシャル": sp}
+        sub, sp = KITS.get(n, KITS.get(REPLICA_OF.get(n), (None, None)))
+        d = {"名前": canon(name) if name else n, "メイン": base, "種類": cls, "射程": rng, "サブ": sub, "スペシャル": sp}
         for k, v in self.over.get(n, {}).items():
             d[k] = v
         return d

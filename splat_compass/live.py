@@ -269,7 +269,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
 
     def on_end(m):
         if m.end is not None:  # 終わりの演出中に読んだ分は捨てたので、グラフからも消す
-            out_q.put(("wp_trim", m.end - m.start - END_TRIM))
+            out_q.put(("wp_trim", m.end - m.start - getattr(m, "trim", END_TRIM)))
         if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < MIN_MATCH or len(m.events) < MIN_EVENTS):
             out_q.put(("log", f"短すぎる（{int((m.end or m.start) - m.start)}秒）ので試合として保存しませんでした"))
             return

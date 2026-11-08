@@ -20,6 +20,7 @@ START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 10.0   # 試合が終わったとみなす、表示が消えている秒数（やられて復活を待つ間のマップ表示で切れないよう長め）
 ICON_FROM, ICON_TO = 3.0, 60.0  # ブキのアイコンを切り出し始める秒と、遅くともここまでに決める秒（試合開始から）
 ICON_SHOTS = 5  # 1人あたり何枚切り出して選ぶか
+FINISH_GONE = 2.0  # 残り時間の表示が（マップ・復活待ちでもないのに）この秒数見えなければ、試合が終わった（Finish!）とみなす
 ICON_SHARP = 40.0  # アイコンの輪郭のくっきりさ（これより弱い切り出しは背景とみなす。本物のアイコンは 78 以上だった）
 ICON_AFTER_GO = 1.0  # 残り時間が減り始めて（GO）からこの秒数たってから切り出す（始まる前の演出を避ける）
 BUBBLE_DROP = 6.0  # ヤグラ・ホコのカウントが1秒に減りうる上限（これより急に減ったら読み違いとみなす。ホコを持って泳ぐと速い）
@@ -97,6 +98,7 @@ class Tracker:
     def __init__(self, fps, on_event=None, on_match_end=None, on_log=None, stage_reader=None):
         self.stage_reader = stage_reader  # hud.StageReader（無ければステージは読まない）
         self.go_ref = None  # 試合の始めの 5:00 の数字の形（GO を決めるため）
+        self.busy_t = -1e9  # 最後にマップ画面か復活待ちを見た時刻
         self.stage_best = None  # ルールの表示の間で、ステージの名前が一番くっきり見えたコマ (縁の強さ, 切り出し, 時刻)
         self.on_log = on_log or (lambda text: None)  # 試合の始まり・終わりを決めた理由（あとで確かめる用）
         self.fps = fps
@@ -165,7 +167,21 @@ class Tracker:
                 if self.finished is not None:
                     self._set_result(self.finished, res, img)
             return
-        if known < 6 and (is_map_screen(img) or me_respawning(img)):
+        busy = known < 6 and (is_map_screen(img) or me_respawning(img))
+        if busy:
+            self.busy_t = t
+        hud_on = hud_visible(img)
+        if hud_on:
+            self.timer_seen = t
+        # Finish! のあとは、上の残り時間と8人の表示が両方消える（勝敗が出るまでの画面で8人を読むと人数が荒れる）。
+        # 残り時間が見えなくなって、マップ・復活待ちでもない状態が少し続いたら、そこで試合を終える
+        if (not hud_on and self.timer_seen is not None and t - self.timer_seen >= FINISH_GONE
+                and t - max(self.busy_t, self.timer_seen) >= FINISH_GONE and t - self.match.start > FAKE_MATCH):
+            self.on_log("残り時間の表示が消えたので試合を終えます（Finish!）")
+            # 終わりの時刻は Finish! の瞬間なので、それより前の出来事は本物。表示が隠れたあとの読み違いだけ捨てる
+            self._end(self.timer_seen, trim=0.3)
+            return
+        if busy:
             self.off_since = None  # マップを開いている・復活待ち。試合は続いている
         elif known < 6:
             if self.off_since is None:
@@ -177,8 +193,7 @@ class Tracker:
         else:
             self.off_since = None
         # 残り時間の表示で、本当に試合中かを確かめる（試合後の画面を8人の表示と読み違えて続いてしまうのを防ぐ）
-        if hud_visible(img):
-            self.timer_seen = t
+        if hud_on:
             self._watch_go(t, img)
         elif self.timer_seen is None and t - self.match.start > NO_TIMER_START:
             self.on_log("残り時間の表示が一度も出ないので、試合ではなかったとみなします")
@@ -415,7 +430,7 @@ class Tracker:
         if votes and not self.match.me_by_gauge:  # ゲージで決まっていればそちらを優先
             self.match.me_slot = max(votes, key=votes.get)
 
-    def _end(self, t):
+    def _end(self, t, trim=None):
         if t - self.match.start < FAKE_MATCH:
             # 試合後の画面などを試合と読み違えた短い区間。捨てて、直前の試合の勝敗待ちを続ける
             self.on_log(f"{int(t - self.match.start)}秒で終わったので試合ではなかったとみなします")
@@ -425,18 +440,19 @@ class Tracker:
         if self.finished is not None:
             self._close_finished()
         self.match.end = t
-        self._trim_end(t)
+        self._trim_end(t, END_TRIM if trim is None else trim)
         self._decide_self(final=True)
         self.finished, self.match = self.match, None
         self.cur = None
         self.ready_at = [None] * 8
 
-    def _trim_end(self, t):
+    def _trim_end(self, t, trim=END_TRIM):
+        self.match.trim = trim
         """試合の終わりの演出（Finish! の帯や上部の表示が消えていく途中）で、倒された・溜まったと読み違えたものを捨てる。"""
         m = self.match
-        drop = [e for e in m.events if e.t > t - END_TRIM]
+        drop = [e for e in m.events if e.t > t - trim]
         if drop:
-            m.events = [e for e in m.events if e.t <= t - END_TRIM]
+            m.events = [e for e in m.events if e.t <= t - trim]
             self.on_log(f"試合の終わりの演出中に読んだ出来事を{len(drop)}件取り消しました")
 
     def end_by_hand(self, t, result=None):
