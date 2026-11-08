@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 
 import cv2
+import numpy as np
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
                   bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
@@ -19,6 +20,8 @@ START_FRAMES = 5     # 試合が始まったとみなす連続コマ数
 END_SECONDS = 10.0   # 試合が終わったとみなす、表示が消えている秒数（やられて復活を待つ間のマップ表示で切れないよう長め）
 ICON_FROM, ICON_TO = 3.0, 60.0  # ブキのアイコンを切り出し始める秒と、遅くともここまでに決める秒（試合開始から）
 ICON_SHOTS = 5  # 1人あたり何枚切り出して選ぶか
+ICON_SHARP = 40.0  # アイコンの輪郭のくっきりさ（これより弱い切り出しは背景とみなす。本物のアイコンは 78 以上だった）
+ICON_AFTER_GO = 1.0  # 残り時間が減り始めて（GO）からこの秒数たってから切り出す（始まる前の演出を避ける）
 BUBBLE_DROP = 6.0  # ヤグラ・ホコのカウントが1秒に減りうる上限（これより急に減ったら読み違いとみなす。ホコを持って泳ぐと速い）
 IGNORE_FIRST = 12.0  # 試合開始直後は表示が安定しないので出来事を記録しない（秒）
 SELF_WINDOW = (0.5, 12.0)  # 復活待ち表示が出る何秒前〜何秒前に倒された枠を自分の候補にするか
@@ -233,7 +236,9 @@ class Tracker:
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), int(asari_goal_open(img))])
         self._update_slots(t, slots)
         rel = t - self.match.start
-        if ICON_FROM <= rel and any(i is None for i in self.match.icons) and (rel > ICON_TO or hud_visible(img)):
+        go = self.match.go
+        ready = (go is not None and t >= go + ICON_AFTER_GO) or (go is None and rel >= 12.0)  # GO が読めなければ12秒後から
+        if ICON_FROM <= rel and ready and any(i is None for i in self.match.icons) and (rel > ICON_TO or hud_visible(img)):
             self._collect_icons(t, rel, img, slots)
         if self.cur is not None:
             self._gauge_vote(me_special_full(img))
@@ -262,7 +267,11 @@ class Tracker:
             c = caps[k]
             if slots[k] == ALIVE and (not c or t - c[-1][0] >= 1.0):
                 ic = crop_icon(img, k)
-                c.append((t, ic, feature(ic)))
+                # 始まる前の演出で、アイコンの位置に背景（ステージの床など）が見えていることがある。
+                # アイコンは輪郭がくっきりしているので、ぼやけた切り出しは使わない
+                sharp = cv2.Laplacian(cv2.cvtColor(np.ascontiguousarray(ic), cv2.COLOR_RGB2GRAY), cv2.CV_64F).var()
+                if sharp >= ICON_SHARP:
+                    c.append((t, ic, feature(ic)))
             if len(c) >= ICON_SHOTS or (rel > ICON_TO and c):
                 score = [sum(float(f @ g) for _, _, g in c) for _, _, f in c]
                 self.match.icons[k] = c[max(range(len(c)), key=lambda i: score[i])][1]
