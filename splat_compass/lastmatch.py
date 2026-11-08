@@ -13,7 +13,7 @@ import html
 import json
 import os
 
-from . import clips, clock, coach, feedback, learning, turf, weapons, winprob
+from . import clams, clips, clock, coach, feedback, learning, turf, weapons, winprob
 from .hud import RULE_NAMES, SLOT_NAMES, STAGES
 from .storage import MODES, mode_of
 
@@ -142,6 +142,62 @@ def turf_summary(m, data):
             + "".join(rows) + "</table>" + note + "</div>")
 
 
+def clam_card(m):
+    """ガチアサリの試合で、両チームのアサリの所持の推移と、ガチアサリを持っていた時間。"""
+    sm = clams.summary(m)
+    if sm is None:
+        return ('<div class="card wide"><h3>アサリの所持</h3><p class="muted">この試合にはアサリの所持の記録がありません'
+                '（記録するようになる前の試合か、読み取れませんでした）。</p></div>')
+    W, H = 720, 170
+    dur = max(m["video_end"] - m["video_start"], 1)
+    top = max(10, *sm["peak"])
+    x = lambda rel: 40 + (W - 50) * min(max(rel / dur, 0), 1)
+    y = lambda v: 10 + (H - 40) * (1 - v / top)
+    parts = [f'<text x="34" y="{y(top) + 4:.1f}" text-anchor="end" font-size="11" fill="#888">{top}</text>',
+             f'<text x="34" y="{y(0) + 4:.1f}" text-anchor="end" font-size="11" fill="#888">0</text>',
+             f'<line x1="40" y1="{y(0):.1f}" x2="{W - 10}" y2="{y(0):.1f}" stroke="#ddd"/>']
+    g = clock.go_rel(m)
+    g = clock.GO_OFFSET if g is None else g
+    for mm in range(5, -1, -1):
+        rel = g + (5 - mm) * 60
+        if rel <= dur:
+            parts.append(f'<text x="{x(rel):.1f}" y="{H - 8}" text-anchor="middle" font-size="11" fill="#888">{mm}:00</text>')
+    # ガチアサリを持っていた時間を帯で描く（味方は青、相手は橙）
+    ser = sm["series"]
+    for (r0, _, _, side), (r1, _, _, _) in zip(ser, ser[1:]):
+        if side is not None and r1 - r0 <= 3:
+            color = "#cfe0fb" if side == "味方" else "#ffe3cc"
+            parts.append(f'<rect x="{x(r0):.1f}" y="10" width="{max(x(r1) - x(r0), 1):.1f}" height="{H - 40}" fill="{color}"/>')
+    for col, color in ((1, "#1f6feb"), (2, "#e67e22")):
+        pts = " ".join(f"{x(r[0]):.1f},{y(r[col]):.1f}" for r in ser)
+        parts.append(f'<polyline points="{pts}" fill="none" stroke="{color}" stroke-width="1.8"/>')
+    for rel, v in (sm["me"] or {}).get("lost", []):
+        what = "ガチアサリ" if v == clams.POWER else f"アサリ{v}個"
+        parts.append(f'<circle cx="{x(rel):.1f}" cy="{H - 26}" r="4" fill="#c0392b"><title>{clock.fmt(m, rel)} {what}を持ったまま倒された</title></circle>')
+    svg = f'<svg viewBox="0 0 {W} {H}" style="width:100%;max-width:{W}px;background:#fff;border-radius:8px">{"".join(parts)}</svg>'
+    legend = ('<div class="muted" style="font-size:12px">線は各チームが持っているアサリの合計（青が味方・橙が相手。ガチアサリは数えない）。'
+              '色の帯はガチアサリを持っていた時間。<span style="color:#c0392b">●</span>自分がアサリを持ったまま倒された</div>')
+    rows = []
+    for side in ("味方", "相手"):
+        i = 0 if side == "味方" else 1
+        rows.append(f'<tr><td>{side}</td><td>{sm["peak"][i]}個</td><td>{sm["picks"][side]}回</td><td>{sm["power"][side]}秒</td></tr>')
+    table = ('<table><tr><th>チーム</th><th>最も多く持っていた合計</th><th>ガチアサリを持った回数</th>'
+             '<th>ガチアサリを持っていた時間</th></tr>' + "".join(rows) + "</table>")
+    me = sm["me"]
+    note = ""
+    if me is not None:
+        lost = me["lost"]
+        small = sum(v for _, v in lost if isinstance(v, int))
+        power_lost = sum(1 for _, v in lost if v == clams.POWER)
+        bits = [f"自分が一度に持っていたアサリは最大 {me['peak']}個", f"ガチアサリを持っていた時間は {me['power_sec']}秒"]
+        if lost:
+            bits.append(f"アサリを持ったまま倒されたのは {len(lost)}回（落としたアサリ {small}個"
+                        + (f"、ガチアサリ {power_lost}回" if power_lost else "") + "）")
+        note = '<p class="muted">' + "。".join(bits) + "。</p>"
+    return ('<div class="card wide"><h3>アサリの所持</h3>' + svg + legend + table + note
+            + '<p class="muted">画面上部のアサリの表示を約1秒ごとに読んだもので、数え間違いが混じることがあります。</p></div>')
+
+
 def html_for(store, link, video_dir=None, file=None):
     ms = saved_matches(store)
     if not ms:
@@ -237,6 +293,8 @@ def html_for(store, link, video_dir=None, file=None):
         out.append(turf_summary(m, turf_data))
     else:
         out.append(f'<div class="card wide"><h3>{title}</h3><p class="muted">{note}</p>' + _chart(m, pr, me_events, kills) + "</div>")
+        if m.get("rule") == "ガチアサリ":
+            out.append(clam_card(m))
 
     # 振り返り
     lis = "".join(f'<li class="k-{ESC(k)}"><b>{ESC(k)}</b> {ESC(t)}</li>' for k, t in feedback.match_feedback(m, base, store))

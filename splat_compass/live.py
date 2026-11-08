@@ -171,6 +171,9 @@ def status_dict(tr, t, base=None):
          "kills": len(m.kills),
          "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None,
          "pace": my_pace(tr, t, None if m.rule == clock.TURF_RULE else base)}
+    if m.rule == "ガチアサリ":
+        from . import clams
+        d["clams"] = clams.current(getattr(m, "clam_timeline", []))
     if m.rule == clock.TURF_RULE:
         go = m.go if m.go is not None else m.start + clock.GO_OFFSET
         d["turf_final"] = t - go >= clock.TURF_LENGTH - clock.TURF_FINAL_SECONDS

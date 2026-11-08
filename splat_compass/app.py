@@ -213,6 +213,7 @@ header { flex-wrap:wrap; } .viewsel { white-space:nowrap; }
 .slot.dead { background:#c8ccd2; color:#6b7280; } .slot.sp { box-shadow:0 0 0 3px #f1c40f; }
 .slot.me { outline:2px solid #111; outline-offset:2px; }
 .slot.gap { width:10px; background:none; }
+.slot.pw { background:#f1c40f; color:#5b4500; box-shadow:0 0 0 3px #b8860b; }
 .wrow { display:flex; gap:6px; margin:4px 0; flex-wrap:wrap; align-items:flex-start; }
 .wrow .side { width:34px; font-size:12px; color:#6b7280; padding-top:28px; }
 .wcell { width:118px; font-size:12px; text-align:center; }
@@ -537,11 +538,20 @@ function showState(d) {
       if (x === 0) cls.push("dead");
       if (x === 2) cls.push("sp");
       if (k === st.me) cls.push("me");
-      html += `<span class="${cls.join(" ")}">${x === 0 ? "×" : ""}</span>`;
+      const c = st.clams ? st.clams[k] : null;
+      if (c === "power" && x !== 0) cls.push("pw");
+      const label = x === 0 ? "×" : c === "power" ? "G" : (typeof c === "number" && c > 0 ? String(c) : "");
+      html += `<span class="${cls.join(" ")}" title="${c === "power" ? "ガチアサリ" : typeof c === "number" ? "アサリ " + c + "個" : ""}">${label}</span>`;
     });
     const a = st.slots.slice(0, 4).filter(x => x !== 0).length, e = st.slots.slice(4).filter(x => x !== 0).length;
     const sa = st.slots.slice(0, 4).filter(x => x === 2).length, se = st.slots.slice(4).filter(x => x === 2).length;
     alive = `人数 ${a} 対 ${e}${a < e ? "（不利）" : a > e ? "（有利）" : ""}<br>スペシャル準備 味方 ${sa} ／ 敵 ${se}`;
+    if (st.clams) {
+      const sum = a => a.reduce((s, v) => s + (typeof v === "number" ? v : 0), 0);
+      const ca = sum(st.clams.slice(0, 4)), ce = sum(st.clams.slice(4));
+      const pw = st.clams.slice(0, 4).includes("power") ? "味方が持っている" : st.clams.slice(4).includes("power") ? "相手が持っている" : "なし";
+      alive += `<br>アサリ 味方 ${ca}個 ／ 敵 ${ce}個（ガチアサリ: ${pw}）`;
+    }
   }
   $("slots").innerHTML = html; $("alive").innerHTML = alive;
   const wpAge = d.wp_at == null ? null : Math.max(0, d.now - d.wp_at);
