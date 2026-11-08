@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from .clock import TURF_RULE
-from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
+from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, asari_slots, me_respawning, me_special_full,
                   bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
@@ -254,6 +254,8 @@ class Tracker:
             elif rule is None:  # ルールが読めなかった試合は両方記録しておく
                 p = read_objective_pos(img)
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), int(asari_goal_open(img))])
+        if self.match.rule == "ガチアサリ":
+            slots = asari_slots(img, slots, self.cur)
         self._update_slots(t, slots)
         rel = t - self.match.start
         go = self.match.go

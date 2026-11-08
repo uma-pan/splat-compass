@@ -51,6 +51,51 @@ def read_slots(img):
     return out
 
 
+def _cross_mask(size):
+    mask = np.zeros((size, size), np.uint8)
+    cv2.line(mask, (4, 4), (size - 5, size - 5), 1, 7)
+    cv2.line(mask, (size - 5, 4), (4, size - 5), 1, 7)
+    return mask
+
+
+def _power_clam_mask(width):
+    mask = np.zeros((20, width), np.uint8)
+    for x in (2, width - 3):
+        cv2.line(mask, (x, 3), (x, 15), 1, 3)
+    for x in range(7, width - 6, 5):
+        cv2.line(mask, (x, 15), (x, 18), 1, 2)
+    return mask
+
+
+_ASARI_CROSSES = [_cross_mask(n) for n in (43, 67)]
+_POWER_CLAMS = [_power_clam_mask(n) for n in (34, 40)]
+
+
+def _matches_shape(mask, shapes, threshold):
+    return any(cv2.minMaxLoc(cv2.matchTemplate(mask, shape, cv2.TM_CCOEFF_NORMED))[1] >= threshold
+               for shape in shapes)
+
+
+def asari_slots(img, slots, previous):
+    """暗いブキやガチアサリの印があるときも、×が見えた枠だけをデスとする。"""
+    corrected = list(slots)
+    for k, (x, status) in enumerate(zip(SLOT_X, slots)):
+        if status not in (DEAD, None):
+            continue
+        if status == DEAD:
+            box = img[24:115, x - 49:x + 49]
+            value = box.max(2)
+            gray = ((value > 72) & (value < 190) & (value - box.min(2) < 26)).astype(np.uint8)
+            if _matches_shape(gray, _ASARI_CROSSES, 0.35):
+                continue
+        corrected[k] = None  # 既知の生存・スペシャル状態は、不明なコマで変えない
+        if previous is None or previous[k] == DEAD:
+            marker = img[86:126, x - 45:x + 22]
+            if _matches_shape((marker.min(2) > 170).astype(np.uint8), _POWER_CLAMS, 0.50):
+                corrected[k] = ALIVE
+    return corrected
+
+
 TIMER_BOX = (895, 45, 130, 55)  # 画面上部中央の残り時間（黒い地に白い数字）
 
 
