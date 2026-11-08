@@ -165,7 +165,7 @@ def section_overview(ms):
             + "</div>")
 
 
-def section_rules(ms):
+def section_rules(ms, store=None):
     out = []
     rows = []
     for rule in RULES:
@@ -213,6 +213,8 @@ def section_rules(ms):
         out.append(card("確保されてから最初の10秒に何をしたか", '<p class="muted">10秒以内に終わらなかった打開だけで比べています</p>'
                         + table(["最初の10秒", "回数", "そこから打開まで"], early)))
         out.append(card("勝ち試合と負け試合（1試合の平均）", table(["", "確保された回数", "取られたカウント合計", "打開までの平均"], wl)))
+        if store is not None:
+            out.append(special_card(store, eps))
     for rule in ("ガチヤグラ", "ガチホコ"):
         g = [m for m in ms if m.get("rule") == rule and m.get("objective")]
         if g:
@@ -229,6 +231,32 @@ def section_rules(ms):
             ["ゴールを割られた回数", str(len(eps))], ["閉じるまで", num(avg([e["seconds"] for e in eps])) + "秒"],
             ["その間に取られたカウント", num(avg([e["count_lost"] for e in eps]))]])))
     return '<div class="grid2">' + "".join(out) + "</div>"
+
+
+def special_card(store, eps):
+    """エリアの打開で、味方のスペシャルの種類ごとに、早めに使ったときと使わなかったときの成功率を比べる。"""
+    from .weapon_info import Info
+    namer, info = weapons.Namer(store), Info(store)
+
+    def specials_of(m):
+        names = weapons.weapons_of(store, m, namer)
+        return [info.get(n)["スペシャル"] if n else None for n in names] if names else None
+    d = area.by_special(eps, specials_of)
+    rows = []
+    for sp, x in sorted(d.items(), key=lambda kv: -kv[1]["n"]):
+        if x["n"] < 5:
+            continue
+        nu, nn = x["used"], x["n"] - x["used"]
+        rows.append([ESC(sp), str(x["n"]), pct(nu / x["n"]),
+                     f'{pct(x["ok_used"] / nu)}（{nu}）' if nu else "—",
+                     f'{pct(x["ok_not"] / nn)}（{nn}）' if nn else "—"])
+    if not rows:
+        return card("打開でのスペシャルの種類ごとの使い方", '<p class="muted">ブキの名前が分かっている打開がまだ足りません</p>')
+    return card(f"打開でのスペシャルの種類ごとの使い方（最初の{int(area.SP_EARLY)}秒）",
+                table(["味方のスペシャル", "味方にいた打開", "早めに使った割合", "使ったときの成功", "使わなかったときの成功"], rows)
+                + f'<p class="muted">{int(area.SP_EARLY)}秒より早く終わった打開は除いています。かっこの中は打開の数です。'
+                  '数が少ない行はたまたまの差が大きいので、10回を超えるまでは参考程度に見てください。'
+                  '使えなかったのは、溜まっていなかったからのこともあります。</p>', wide=True)
 
 
 def section_killers(store, ms):
@@ -511,7 +539,7 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
     tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
     tabs += [("overview", "概要", lambda: section_overview(ms)),
             ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, bool(first_tabs))),
-            ("rules", "ルール別・打開", lambda: section_rules(ms)),
+            ("rules", "ルール別・打開", lambda: section_rules(ms, store)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
             ("weapons", "ブキ別の勝率", lambda: section_weapons(store, ms)),
             ("model", "勝率モデル", lambda: section_model(store, ms))]

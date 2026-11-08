@@ -137,6 +137,39 @@ def early(ep, m, w=EARLY):
     return f
 
 
+SP_EARLY = 12.0  # 打開の始まりから何秒以内に使ったら「早めに使った」とするか
+
+
+def by_special(eps, specials_of, w=SP_EARLY):
+    """スペシャルの種類ごとに、味方にいた打開で最初の w 秒に使ったかと、そのときの打開の成功率を数える。
+    eps: [(試合, 打開)]。specials_of(試合) → 8枠のスペシャル名（分からない枠は None）。
+    1つの打開に同じスペシャルの味方が2人いれば2つと数える。w 秒より早く終わった打開は除く。
+    戻り値: {スペシャル: {"n": 数, "used": 使った数, "ok_used": 使って成功, "ok_not": 使わずに成功}}"""
+    out = {}
+    cache = {}
+    for m, ep in eps:
+        if ep["seconds"] <= w:
+            continue
+        key = id(m)
+        if key not in cache:
+            cache[key] = specials_of(m)
+        sps = cache[key]
+        if not sps:
+            continue
+        for k, slot in enumerate(SLOTS[:4]):
+            sp = sps[k]
+            if not sp:
+                continue
+            used = any(e[2] == slot and e[3] == "スペシャル発動" and ep["start"] <= e[0] <= ep["start"] + w
+                       for e in m["events"])
+            d = out.setdefault(sp, {"n": 0, "used": 0, "ok_used": 0, "ok_not": 0})
+            d["n"] += 1
+            d["used"] += used
+            if ep["success"]:
+                d["ok_used" if used else "ok_not"] += 1
+    return out
+
+
 def _row_after(label, items, w=EARLY):
     """items: [(打開, 最初の w 秒の様子)]。w 秒以降、打開できるまでの残り時間と、その後に取られたカウントを比べる。"""
     if not items:

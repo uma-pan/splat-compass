@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from .hud import DEAD, SPECIAL
+from .hud import DEAD, SLOT_NAMES, SPECIAL
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
 from .tracker import END_TRIM, KIND_LABEL, Tracker
@@ -31,20 +31,41 @@ class Notices:
 
     def __init__(self):
         self.active = set()
+        self.specials = [None] * 8  # 8人のスペシャルの名前（ブキが読めたら入る）
+        self.once = []  # 出来事から出す、1回きりの通知
+
+    def set_weapons(self, names):
+        from .weapon_info import Info
+        info = Info()
+        self.specials = [info.get(n)["スペシャル"] if n else None for n in names]
+
+    def reset(self):
+        self.specials = [None] * 8
+        self.once = []
+
+    def event(self, m, e):
+        """出来事から知らせたいもの。味方がスペシャルを溜めたまま倒されたら、その種類を出す。"""
+        if e.kind == "dead_with_special" and e.slot[0] == "左":
+            sp = self.specials[SLOT_NAMES.index(e.slot)]
+            if sp and e.slot != m.me_slot:
+                self.once.append(f"味方の{sp}が溜めたまま倒された")
 
     def check(self, tr, t):
         """新しく出た通知の一覧を返す。"""
         c = tr.counts()
         now = set()
+        new_once, self.once = self.once, []
         if c:
             ally, enemy = c["alive"]
             if c["specials"][1] >= 2:
-                now.add(f"敵のスペシャル準備 {c['specials'][1]}人")
+                names = [self.specials[k] for k in range(4, 8) if tr.cur and tr.cur[k] == SPECIAL and self.specials[k]]
+                tail = f"（{'・'.join(names)}）" if names else ""
+                now.add(f"敵のスペシャル準備 {c['specials'][1]}人{tail}")
             if tr.special_since is not None and t - tr.special_since >= self.HOLD_WARN:
                 now.add(f"スペシャルを溜めて{int(self.HOLD_WARN)}秒")
         new = now - self.active
         self.active = now
-        return sorted(new)
+        return sorted(new) + new_once
 
 
 def win_prob(tr, t, models):
@@ -163,6 +184,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
         threading.Thread(target=run, daemon=True).start()
 
     def on_event(m, e):
+        notices.event(m, e)
         if e.slot == m.me_slot or e.kind in ("dead", "dead_with_special"):
             out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
 
@@ -200,7 +222,9 @@ def worker(frames, store, source, out_q, stop, cmds=None):
 
     def send_weapons(icons):
         try:
-            out_q.put(("weapons", wreader.read(icons)))
+            res = wreader.read(icons)
+            notices.set_weapons([x["name"] for x in res])
+            out_q.put(("weapons", res))
         except Exception as e:
             out_q.put(("log", f"ブキを読めませんでした: {e}"))
     for t, img in frames:
@@ -221,6 +245,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             cur_start = start
             if start is not None:  # 新しい試合が始まったらグラフを消す（終わった試合のグラフは残しておく）
                 out_q.put(("wp_reset", None))
+                notices.reset()
         if time.time() - last_status > 0.3:
             out_q.put(("status", status_text(tr, t)))
             out_q.put(("state", status_dict(tr, t)))
