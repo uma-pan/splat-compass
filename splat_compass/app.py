@@ -108,6 +108,7 @@ LIVE_HTML = """
   <button id="compact" class="btn">小さくする</button>
 </div>
 <div id="notice" class="notice"></div>
+<div id="reloadbar" class="reloadbar">まとめが新しくなりました <button class="btn" onclick="location.reload()">読み直す</button></div>
 <div id="campick" class="card campick"><h3>読み取るカメラ</h3>
   <p class="muted">キャプチャーボードや OBS の仮想カメラを選んでください。スプラトゥーンの画面が映っているものを選びます。</p>
   <button class="btn" onclick="findCameras()">カメラを探す</button>
@@ -132,6 +133,7 @@ APP_CSS = """<style>
 .btn { border:1px solid #d1d5db; background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:13px; }
 .lv-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
 .wpbig { font-size:40px; font-weight:bold; line-height:1.1; }
+.reloadbar { display:none; margin-bottom:10px; color:#555; } .reloadbar.on { display:block; }
 .campick { display:none; margin-bottom:12px; } .campick.on { display:block; }
 .camlist { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
 .camlist button { border:1px solid #d0d7de; background:#fff; border-radius:8px; padding:6px; cursor:pointer; font-family:inherit; }
@@ -335,7 +337,8 @@ async function poll() {
     }
     since = Math.max(since, d.seq);
     if (version === null) version = d.version;
-    else if (d.version !== version && !inMatch) location.reload();  // 試合が保存されたら、まとめを読み直す
+    // 試合が保存されたら、まとめを読み直すボタンを出す（自動で読み直すと、ページ作りと画像の読み込みが次の試合の読み取りと重なるため）
+    $("reloadbar").classList.toggle("on", d.version !== version);
   } catch (e) {}
   setTimeout(poll, 500);
 }

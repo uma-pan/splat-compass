@@ -308,7 +308,11 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             out_q.put(("weapons", res))
         except Exception as e:
             out_q.put(("log", f"ブキを読めませんでした: {e}"))
+    perf = {"t0": time.time(), "n": 0, "busy": 0.0, "max": 0.0, "wait": 0.0}
+    t_got = time.time()
     for t, img in frames:
+        got = time.time()
+        perf["wait"] += got - t_got
         if stop.is_set():
             break
         while cmds is not None and not cmds.empty():
@@ -345,6 +349,20 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             p, kind = win_prob(tr, t, models)
             if p is not None:
                 out_q.put(("wp", (t - start, p, kind)))
+        # 読み取りの速さを見張る。遅れていたら記録に残す（原因を調べる手がかり）
+        t_got = time.time()
+        dt_ = t_got - got
+        perf["n"] += 1
+        perf["busy"] += dt_
+        perf["max"] = max(perf["max"], dt_)
+        if t_got - perf["t0"] >= 30:
+            el = t_got - perf["t0"]
+            fps = perf["n"] / el
+            if start is not None and fps < FPS * 0.7:
+                out_q.put(("log", f"読み取りが遅れています: 毎秒 {fps:.1f} コマ（1コマの処理 平均 {perf['busy'] / max(perf['n'], 1) * 1000:.0f}ms・"
+                                  f"最大 {perf['max'] * 1000:.0f}ms、映像を待った時間 {perf['wait'] / el * 100:.0f}%、"
+                                  f"動いているスレッド {threading.active_count()}）"))
+            perf.update(t0=t_got, n=0, busy=0.0, max=0.0, wait=0.0)
     tr.flush()
     out_q.put(("log", "映像が終わりました"))
 

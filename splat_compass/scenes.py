@@ -141,7 +141,7 @@ def scene_sections(store, video_dir, last=None, link=file_link):
         if shots:
             imgs = "".join(
                 f'<a href="{link(os.path.join(store.root, "maps", x["image"]))}" target="_blank">'
-                f'<img src="{link(os.path.join(store.root, "maps", x["image"]))}" '
+                f'<img loading="lazy" src="{link(os.path.join(store.root, "maps", x["image"]))}" '
                 f'title="{_mmss(x["rel"])}" height="72" style="margin:2px"></a>' for x in shots)
             rows.append(f'<div class="maps">マップ画面: {imgs}</div>')
         total += len(rows)

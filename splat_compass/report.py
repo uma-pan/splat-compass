@@ -443,7 +443,7 @@ def section_feedback(store, link=None, app=False):
             img = ""
             if rc.get("image") and link:
                 img = (f'<a href="{link(os.path.join(store.root, "results", rc["image"]))}" target="_blank">'
-                       f'<img src="{link(os.path.join(store.root, "results", rc["image"]))}" height="54" '
+                       f'<img loading="lazy" src="{link(os.path.join(store.root, "results", rc["image"]))}" height="54" '
                        f'title="勝敗を読んだ画面（WIN! {rc.get("win")} / LOSE {rc.get("lose")}）"></a>')
             f = ESC(m["_file"])
             fix = (f'<div class="fix">{img}<span class="muted">勝敗が違っていたら:</span>'

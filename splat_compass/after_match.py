@@ -11,6 +11,11 @@ from .storage import Store
 
 
 def main():
+    import sys
+    try:  # 呼び出し元は UTF-8 として読むので、Windows の既定の文字コードではなく UTF-8 で書く
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", default=None)
     a = ap.parse_args()

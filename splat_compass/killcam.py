@@ -136,7 +136,7 @@ def build_sheet(store):
             continue
         uri = pathlib.Path(ps[0]).resolve().as_uri()
         rows.append(f'<tr><td>{k}</td><td>{len(ps)}</td><td>{html.escape(labels.get(k, ""))}</td>'
-                    f'<td><img src="{uri}" height="80"></td></tr>')
+                    f'<td><img loading="lazy" src="{uri}" height="80"></td></tr>')
     page = ("<!DOCTYPE html><html lang='ja'><meta charset='utf-8'><title>倒されたブキのまとまり</title>"
             "<body style='font-family:Meiryo'><p>名前が空のまとまりに、killcam_labels.json で名前を付けてください"
             "（例: {\"c000\": \"パブロ・ヒュー\"}）。</p><table border=1 cellpadding=4>"
