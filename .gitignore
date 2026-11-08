@@ -4,3 +4,7 @@ __pycache__/
 data/
 camera_check/
 camera.txt
+build/
+dist/
+*.spec
+__pycache__/

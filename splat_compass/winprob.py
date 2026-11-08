@@ -338,8 +338,18 @@ def report(matches):
     return full
 
 
+DEFAULTS_DIR = os.path.join(os.path.dirname(__file__), "defaults")  # 配る版に同梱する、最初から使えるモデル
+
+
+def _path_or_default(store, name):
+    p = os.path.join(store.root, name)
+    if os.path.exists(p):
+        return p
+    return os.path.join(DEFAULTS_DIR, name)  # 自分の記録で作ったものがまだ無ければ、同梱のものを使う
+
+
 def load_model(store):
-    path = os.path.join(store.root, "winprob_area.json")
+    path = _path_or_default(store, "winprob_area.json")
     try:
         with open(path, encoding="utf-8") as f:
             d = json.load(f)
@@ -384,7 +394,7 @@ def save_simple(model, store, n):
 
 def load_simple(store):
     try:
-        with open(os.path.join(store.root, "winprob_simple.json"), encoding="utf-8") as f:
+        with open(_path_or_default(store, "winprob_simple.json"), encoding="utf-8") as f:
             d = json.load(f)
         if d["features"] != [FEATURES[c] for c in SIMPLE_COLS]:
             return None

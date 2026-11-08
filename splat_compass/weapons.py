@@ -144,6 +144,45 @@ def all_icons(store, ms=None):
     return out
 
 
+REFS_FILE = os.path.join(os.path.dirname(__file__), "defaults", "weapon_refs.npz")
+_REFS = {}
+
+
+def bundled_refs():
+    """同梱の見本 [(特徴, 名前)]。無ければ空。"""
+    if "v" not in _REFS:
+        try:
+            d = np.load(REFS_FILE, allow_pickle=False)
+            _REFS["v"] = list(zip(d["F"].astype(np.float32), [str(x) for x in d["names"]]))
+        except (OSError, KeyError, ValueError):
+            _REFS["v"] = []
+    return _REFS["v"]
+
+
+def export_refs(store, path=REFS_FILE, per_name=8):
+    """自分が名前を付けた絵から、配る版に同梱する見本を作る。名前ごとに最大 per_name 枚、互いに似ていないものを選ぶ。
+    絵ではなく見比べに使う特徴だけを保存する。"""
+    labels = load_labels(store)
+    by = {}
+    for key, ic, _, _ in all_icons(store):
+        n = labels.get(key)
+        if n not in (None, "", UNKNOWN):
+            by.setdefault(n, []).append(feature(ic))
+    F, names = [], []
+    for n, fs in sorted(by.items()):
+        chosen = [fs[0]]
+        for f in fs[1:]:  # すでに選んだものと一番似ているものでも 0.97 未満なら足す（似たものばかりにしない）
+            if len(chosen) >= per_name:
+                break
+            if max(float(f @ c) for c in chosen) < 0.97:
+                chosen.append(f)
+        F += chosen
+        names += [n] * len(chosen)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    np.savez_compressed(path, F=np.array(F, dtype=np.float16), names=np.array(names))
+    return len(by), len(F)
+
+
 class Namer:
     """名前の付いた絵と見比べて名前を決める。"""
 
@@ -152,6 +191,8 @@ class Namer:
         items = items if items is not None else all_icons(store)
         named = [(feature(ic), self.labels[key]) for key, ic, _, _ in items
                  if self.labels.get(key) not in (None, "", UNKNOWN)]
+        if items is None or labels is None:
+            named += bundled_refs()  # 配る版に同梱した見本（特徴だけで、絵そのものは入っていない）
         self.F = np.array([f for f, _ in named]) if named else None
         self.names = [n for _, n in named]
 

@@ -1,0 +1,21 @@
+@echo off
+rem 配る版（exe）を作る。できたものは dist\splat-compass フォルダ（中の splat-compass.exe を開く）
+cd /d "%~dp0"
+python -m pip install -q -r requirements.txt pyinstaller
+python -m splat_compass.make_defaults
+if errorlevel 1 goto fail
+python -m PyInstaller --noconfirm --clean --name splat-compass --windowed ^
+  --add-data "splat_compass\templates;splat_compass\templates" ^
+  --add-data "splat_compass\defaults;splat_compass\defaults" ^
+  --collect-all webview ^
+  launcher.py
+if errorlevel 1 goto fail
+powershell -NoProfile -Command "Compress-Archive -Force -Path dist\splat-compass -DestinationPath dist\splat-compass.zip"
+echo.
+echo できました: dist\splat-compass.zip （これを配ります）
+pause
+exit /b 0
+:fail
+echo 失敗しました。上のメッセージを確かめてください。
+pause
+exit /b 1

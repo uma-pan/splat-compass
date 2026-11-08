@@ -44,6 +44,7 @@ class State:
         self.seq = 0
         self.version = 0      # まとめが変わるたびに増える（画面が読み直す合図）
         self.reading = False  # 映像を読んでいるか
+        self.can_start = False  # 画面からカメラを選んで読み始められるか
 
     def _write(self, text):
         if not self.log_dir:
@@ -93,6 +94,7 @@ class State:
     def snapshot(self, since):
         with self.lock:
             return {"state": self.state, "wp": self.wp, "wp_kind": self.wp_kind, "reading": self.reading,
+                    "can_start": self.can_start,
                     "weapons": self.weapons, "weapons_file": self.weapons_file, "last_saved": self.last_saved,
                     "version": self.version, "seq": self.seq,
                     "logs": [(i, t) for i, t, _ in self.logs if i > since],
@@ -106,6 +108,10 @@ LIVE_HTML = """
   <button id="compact" class="btn">小さくする</button>
 </div>
 <div id="notice" class="notice"></div>
+<div id="campick" class="card campick"><h3>読み取るカメラ</h3>
+  <p class="muted">キャプチャーボードや OBS の仮想カメラを選んでください。スプラトゥーンの画面が映っているものを選びます。</p>
+  <button class="btn" onclick="findCameras()">カメラを探す</button>
+  <div id="camlist" class="camlist"></div></div>
 <svg id="wpchart" class="wpchart" viewBox="0 0 600 150" preserveAspectRatio="none"></svg>
 <div class="lv-grid">
   <div class="card"><h3>試合</h3><div id="matchinfo" class="info">試合を待っています</div>
@@ -126,6 +132,10 @@ APP_CSS = """<style>
 .btn { border:1px solid #d1d5db; background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:13px; }
 .lv-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
 .wpbig { font-size:40px; font-weight:bold; line-height:1.1; }
+.campick { display:none; margin-bottom:12px; } .campick.on { display:block; }
+.camlist { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
+.camlist button { border:1px solid #d0d7de; background:#fff; border-radius:8px; padding:6px; cursor:pointer; font-family:inherit; }
+.camlist img { display:block; width:240px; height:135px; object-fit:cover; background:#000; border-radius:4px; margin-bottom:4px; }
 .notice { min-height:0; font-size:18px; font-weight:bold; color:#fff; background:#c0392b; border-radius:8px; padding:0 12px; margin:4px 0;
           max-height:0; overflow:hidden; transition:max-height .2s, padding .2s; }
 .notice.on { max-height:80px; padding:8px 12px; }
@@ -171,6 +181,16 @@ body.compact .logs { max-height:120px; }
 
 APP_JS = """<script>
 let since = 0, version = null, inMatch = false;
+async function findCameras() {
+  $("camlist").textContent = "探しています…（数秒かかります）";
+  const cams = await (await fetch("/api/cameras")).json();
+  if (!cams.length) { $("camlist").textContent = "カメラが見つかりませんでした。キャプチャーボードや OBS の仮想カメラが動いているか確かめてください。"; return; }
+  $("camlist").innerHTML = cams.map(c => `<button onclick="startCamera(${c.index})"><img src="${c.img}">カメラ ${c.index}（${c.w}×${c.h}）</button>`).join("");
+}
+async function startCamera(i) {
+  const r = await fetch("/api/start_camera", { method: "POST", body: JSON.stringify({ index: i }) });
+  if (!r.ok) alert(await r.text());
+}
 const $ = id => document.getElementById(id);
 const mmss = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
 
@@ -232,6 +252,7 @@ function showState(d) {
     const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
     $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
   }
+  $("campick").classList.toggle("on", !d.reading && d.can_start);
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
   if (d.last_saved) $("lastlabel").textContent = "直前の試合（" + d.last_saved.slice(9, 11) + ":" + d.last_saved.slice(11, 13) + " 開始）";
@@ -406,7 +427,7 @@ def info_table(store, names):
 
 
 # ---------- サーバー ----------
-def make_handler(store, get_video_dir, st, cmds):
+def make_handler(store, get_video_dir, st, cmds, start_camera=None):
     root = pathlib.Path(store.root).resolve()
     cache = {"version": None, "html": None}
 
@@ -451,6 +472,19 @@ def make_handler(store, get_video_dir, st, cmds):
             try:
                 if u.path == "/":
                     self._send(200, page().encode("utf-8"), "text/html; charset=utf-8")
+                elif u.path == "/api/cameras":
+                    import base64
+                    import tempfile
+                    import cv2
+                    from .sources import list_cameras
+                    d = tempfile.mkdtemp()
+                    out = []
+                    for i, w, h in list_cameras(snapshot_dir=d):
+                        img = cv2.imread(os.path.join(d, f"camera_{i}.png"))
+                        ok, buf = cv2.imencode(".jpg", cv2.resize(img, (320, 180))) if img is not None else (False, None)
+                        out.append({"index": i, "w": w, "h": h,
+                                    "img": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""})
+                    self._send(200, json.dumps(out).encode("utf-8"), "application/json")
                 elif u.path == "/api/live":
                     since = int(urllib.parse.parse_qs(u.query).get("since", ["0"])[0])
                     self._send(200, json.dumps(st.snapshot(since), ensure_ascii=False).encode("utf-8"),
@@ -479,6 +513,12 @@ def make_handler(store, get_video_dir, st, cmds):
                     from . import weapon_info
                     weapon_info.set_override(store, str(body.get("name", "")), body["field"], str(body.get("value", "")).strip())
                     self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/start_camera":
+                    err = start_camera(int(body.get("index", 0))) if start_camera else "ここからは始められません"
+                    if err:
+                        self._send(400, err.encode("utf-8"), "text/plain; charset=utf-8")
+                    else:
+                        self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/end":
                     if cmds is None:
                         self._send(400, "映像を読んでいません".encode("utf-8"), "text/plain; charset=utf-8")
@@ -536,8 +576,8 @@ def make_handler(store, get_video_dir, st, cmds):
     return Handler
 
 
-def serve(store, get_video_dir, st, port, cmds=None):
-    handler = make_handler(store, get_video_dir, st, cmds)
+def serve(store, get_video_dir, st, port, cmds=None, start_camera=None):
+    handler = make_handler(store, get_video_dir, st, cmds, start_camera)
     for p in range(port, port + 20):  # 使われていたら次の番号
         try:
             httpd = ThreadingHTTPServer(("127.0.0.1", p), handler)
@@ -607,13 +647,10 @@ def main():
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
     stop = threading.Event()
-    cmds = queue.Queue() if (a.video or a.camera is not None) else None
-    if a.video or a.camera is not None:
-        if a.video:
-            frames, source = video_frames(a.video, live.FPS, realtime=not a.fast), os.path.basename(a.video)
-        else:
-            frames, source = camera_frames(a.camera, live.FPS), "camera"
+    cmds = queue.Queue()
+    lock = threading.Lock()
 
+    def begin(frames, source):
         def run():
             try:
                 live.worker(frames, store, source, q, stop, cmds)
@@ -621,7 +658,37 @@ def main():
                 q.put(("end", None))
         st.reading = True
         threading.Thread(target=run, daemon=True).start()
-    url = serve(store, lambda: store.load_config().get("video_dir"), st, a.port, cmds)
+
+    def start_camera(index):
+        """画面で選んだカメラで読み始める。選んだ番号は次から自動で使う。"""
+        with lock:
+            if st.reading:
+                return "もう読んでいます"
+            try:
+                frames = camera_frames(index, live.FPS)
+                first = next(frames)  # 開けるかここで確かめる
+            except Exception as e:
+                return f"カメラ {index} を開けませんでした: {e}"
+
+            def again():
+                yield first
+                yield from frames
+            cfg = store.load_config()
+            cfg["camera"] = index
+            store.save_config(cfg)
+            begin(again(), "camera")
+            return None
+
+    if a.video:
+        begin(video_frames(a.video, live.FPS, realtime=not a.fast), os.path.basename(a.video))
+    else:
+        cam = a.camera if a.camera is not None else store.load_config().get("camera")
+        st.can_start = True
+        if cam is not None:
+            err = start_camera(int(cam))
+            if err:
+                st._push(st.logs, err + "。カメラを選び直してください")
+    url = serve(store, lambda: store.load_config().get("video_dir"), st, a.port, cmds, start_camera)
     open_window(url)
     stop.set()
 

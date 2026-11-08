@@ -231,7 +231,12 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             import sys
             try:
                 flags = 0x00004000 if os.name == "nt" else 0  # Windows では優先度を下げる（BELOW_NORMAL）
-                p = subprocess.Popen([sys.executable, "-m", "splat_compass.after_match", "--data", store.root],
+                if getattr(sys, "frozen", False):  # 配る版（exe）は、自分自身を「試合後の作業」として起動する
+                    cmd = [sys.executable, "after-match", "--data", store.root]
+                    flags |= 0x08000000 if os.name == "nt" else 0  # 黒い窓を出さない
+                else:
+                    cmd = [sys.executable, "-m", "splat_compass.after_match", "--data", store.root]
+                p = subprocess.Popen(cmd,
                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                                      encoding="utf-8", errors="replace", creationflags=flags,
                                      env={**os.environ, "PYTHONIOENCODING": "utf-8"},
