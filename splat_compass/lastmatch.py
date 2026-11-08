@@ -13,7 +13,7 @@ import html
 import json
 import os
 
-from . import clock, coach, feedback, learning, weapons, winprob
+from . import clips, clock, coach, feedback, learning, weapons, winprob
 from .hud import SLOT_NAMES, STAGES
 from .storage import mode_of
 
@@ -148,15 +148,26 @@ def html_for(store, link, video_dir=None, file=None):
     out.append(f'<div class="card wide"><h3>振り返り</h3><ul class="fb">{lis}</ul></div>')
 
     # 録画があれば場面を再生できるようにする
-    src = None
-    if video_dir and m.get("source") and m["source"] != "camera" and os.path.exists(os.path.join(video_dir, m["source"])):
-        src = link(os.path.join(video_dir, m["source"]))
+    src, off = None, 0.0
+    loc = clips.locate(m, video_dir)  # 録画（カメラから読んだ試合は、同じ時間の OBS の録画）
+    if loc is not None:
+        src, off = link(loc[0]), loc[1]
+        made = clips.existing(store, m)
+        vids = "".join(f'<div style="margin-top:8px"><div class="muted">{ESC(n)}</div>'
+                       f'<video controls preload="none" src="{link(pth)}" style="width:100%;max-width:720px"></video></div>'
+                       for n, pth in made)
+        btns = "".join(f'<button class="btn" onclick="makeClips({ESC(json.dumps(m["_file"]))}, \'{k}\')">{n}</button> '
+                       for k, n in clips.KINDS.items())
         out.append('<div class="card wide"><video id="lv" controls preload="none" style="width:100%;max-width:720px"></video>'
-                   '<div id="lvnow" class="muted">「再生」を押すと、その場面の少し前から流します</div></div>')
+                   '<div id="lvnow" class="muted">「再生」を押すと、その場面の少し前から流します</div>'
+                   f'<div style="margin-top:10px">動画にまとめる: {btns}<span class="muted">（できたら記録の欄に出ます。このタブを開き直すと見られます）</span></div>'
+                   f'{vids}</div>')
 
-    def play_btn(t_video, label):
+    def play_btn(t_cam, label):
+        """t_cam: 読み取ったときの時刻（試合開始が m["video_start"]）。録画の時刻に直して再生する。"""
         if not src:
             return ""
+        t_video = off + (t_cam - m["video_start"])
         a, b = t_video - 8, t_video + 4
         return (f'<button class="btn" onclick="{ESC(f"lmPlay({json.dumps(src)}, {a:.1f}, {b:.1f}, {json.dumps(label, ensure_ascii=False)})")}">再生</button>')
 

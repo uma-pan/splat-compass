@@ -206,6 +206,10 @@ async function recam() {
   await fetch("/api/stop_camera", { method: "POST", body: "{}" });
   findCameras();
 }
+async function makeClips(file, kind) {
+  const r = await fetch("/api/clips", { method: "POST", body: JSON.stringify({ file: file, kind: kind }) });
+  if (!r.ok) alert(await r.text());
+}
 async function setConfig(c) {
   const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
   if (!r.ok) { alert(await r.text()); return; }
@@ -644,6 +648,24 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                     store.update(os.path.basename(str(body["file"])), {"mode": body["mode"]})
                     with st.lock:
                         st._push(st.logs, f"試合の種類を直しました: {body['file']} → {body['mode']}")
+                    self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/clips" and body.get("file"):
+                    from . import clips
+                    kind = body.get("kind")
+                    if kind not in clips.KINDS:
+                        raise ValueError("種類が違います")
+                    m = store.load(os.path.join(store.mdir, os.path.basename(str(body["file"]))))
+
+                    def job():
+                        def log(text):
+                            with st.lock:
+                                st._push(st.logs, text)
+                        try:
+                            if not clips.make(store, [m], kind, get_video_dir(), log):
+                                log(f"{clips.KINDS[kind]}がありませんでした")
+                        except Exception as e:
+                            log(f"動画にまとめられませんでした: {e}")
+                    threading.Thread(target=job, daemon=True).start()
                     self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
