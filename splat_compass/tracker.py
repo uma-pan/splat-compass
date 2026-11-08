@@ -215,12 +215,17 @@ class Tracker:
         self._kills(t, img)
         if t - self.last_count_t >= 1.0:
             self.last_count_t = t
-            c = read_counts(img)
-            if c is not None:
-                pl, pr = read_penalty(img)
-                self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3]), pl, pr])
-            elif self.match.rule in ("ガチヤグラ", "ガチホコ", None):
+            rule = self.match.rule
+            if rule in ("ガチヤグラ", "ガチホコ"):
+                # 固定位置にカウントが無いので、背景を数字と読み違えることがある。
                 self._bubble_counts(t, img)
+            else:
+                c = read_counts(img)
+                if c is not None:
+                    pl, pr = read_penalty(img)
+                    self.match.timeline.append([round(t, 1), c[0], c[1], int(c[2]), int(c[3]), pl, pr])
+                elif rule is None:
+                    self._bubble_counts(t, img)
             on_map = is_map_screen(img)
             # マップ画面が出るたびに1枚残す。出始めは半透明で描かれている途中なので、次に見たとき（約1秒後）に撮る
             if on_map and self.map_prev and not self.map_taken:
@@ -233,7 +238,6 @@ class Tracker:
             if not on_map:
                 self.map_taken = False
             self.map_prev = on_map
-            rule = self.match.rule
             if rule in ("ガチヤグラ", "ガチホコ", None) and self.match.checkpoints is None:
                 rel = t - self.match.start
                 if CP_FROM <= rel <= CP_TO:
