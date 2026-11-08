@@ -230,7 +230,7 @@ def html_for(store, link, video_dir=None, file=None):
         btns = "".join(f'<button class="btn" type="button" onclick="makeClips(this, {file_arg}, \'{k}\')">{n}</button> '
                        for k, n in clips.KINDS.items())
         btns = f'<fieldset class="clip-actions"><legend>動画にまとめる場面</legend>{btns}</fieldset>'
-    out.append(f'<div class="card wide clip-exports"><h3>書き出した動画</h3>{btns}'
+    out.append(f'<div class="card wide clip-exports" data-file="{ESC(m["_file"])}"><h3>書き出した動画</h3>{btns}'
                f'<p class="muted clip-status" role="status"></p><div class="clip-list">{exported_clips(store, m, link)}</div></div>')
 
     def play_btn(t_cam, label):

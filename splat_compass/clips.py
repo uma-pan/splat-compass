@@ -120,11 +120,23 @@ def scenes(m, kind, store=None):
     return out
 
 
-def write(segments, out_path, log=print):
+def write(segments, out_path, log=print, progress=None):
     """場面を順につなぎ、完成したファイルのパスを返す。"""
+    total = sum(e - s for _, s, e in segments)
+    if total <= 0:
+        return None
+    last = None
+
+    def report(seconds, phase):
+        nonlocal last
+        current = min(99, max(0, int(100 * seconds / total))), phase
+        if progress is not None and current != last:
+            progress(*current)
+            last = current
+
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     with tempfile.TemporaryDirectory(dir=os.path.dirname(out_path)) as tmp:
-        staged = _encode(segments, os.path.join(tmp, "clip.mp4"), log)
+        staged = _encode(segments, os.path.join(tmp, "clip.mp4"), log, report)
         if staged is None:
             return None
         extension = os.path.splitext(staged)[1]
@@ -133,11 +145,13 @@ def write(segments, out_path, log=print):
         return output
 
 
-def _encode(segments, out_path, log):
+def _encode(segments, out_path, log, report):
     ff = shutil.which("ffmpeg")
     if ff:
         for audio in (True, False):
-            cmd = [ff, "-y", "-loglevel", "error"]
+            phase = "書き出し中" if audio else "音声なしで再試行中"
+            report(0, phase)
+            cmd = [ff, "-y", "-nostdin", "-nostats", "-loglevel", "error", "-progress", "pipe:1"]
             for p, s, e in segments:
                 cmd += ["-ss", f"{s:.2f}", "-t", f"{e - s:.2f}", "-i", p]
             n = len(segments)
@@ -147,20 +161,36 @@ def _encode(segments, out_path, log):
             cmd += ["-filter_complex", fc, "-map", "[v]"] + (["-map", "[a]"] if audio else []) + \
                    ["-c:v", "libx264", "-preset", "veryfast", "-crf", "26", "-pix_fmt", "yuv420p"] + \
                    (["-c:a", "aac", "-b:a", "128k"] if audio else []) + ["-movflags", "+faststart", out_path]
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               creationflags=0x08000000 if os.name == "nt" else 0)
-            if r.returncode == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
+            code, error = _ffmpeg_progress(cmd, lambda seconds: report(seconds, phase))
+            if code == 0 and os.path.isfile(out_path) and os.path.getsize(out_path):
                 return out_path
-        log(f"ffmpeg で書き出せなかったので、映像だけで書き出します: {r.stderr[-200:]}")
-    return _encode_video_only(segments, out_path, log)
+        log(f"ffmpeg で書き出せなかったので、映像だけで書き出します: {error[-200:]}")
+    phase = "映像のみ書き出し中"
+    report(0, phase)
+    return _encode_video_only(segments, out_path, log, lambda seconds: report(seconds, phase))
 
 
-def _encode_video_only(segments, out_path, log):
+def _ffmpeg_progress(cmd, report):
+    # 標準エラーをファイルに出し、読み取っていないパイプで処理が止まるのを防ぐ。
+    with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as errors:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errors, encoding="utf-8", errors="replace",
+                              creationflags=0x08000000 if os.name == "nt" else 0) as process:
+            for line in process.stdout:
+                key, _, value = line.strip().partition("=")
+                if key == "out_time_us" and value.lstrip("-").isdigit():
+                    report(int(value) / 1_000_000)
+            code = process.wait()
+        errors.seek(0)
+        return code, errors.read()
+
+
+def _encode_video_only(segments, out_path, log, report):
     import cv2  # ffmpeg が無いとき: 映像だけ（音なし）
 
     wr = None
     output = os.path.splitext(out_path)[0] + ".webm"
     size = (1280, 720)
+    completed = 0.0
     try:
         for p, s, e in segments:
             cap = cv2.VideoCapture(p)
@@ -186,8 +216,10 @@ def _encode_video_only(segments, out_path, log):
                                 raise RuntimeError("動画を書き出せませんでした")
                             log("WebM で書き出せないため、外部プレーヤー向けの MP4 で保存します")
                     wr.write(cv2.resize(frame, size, interpolation=cv2.INTER_AREA))
+                    report(completed + (i + 1) / fps)
             finally:
                 cap.release()
+            completed += e - s
     finally:
         if wr is not None:
             wr.release()
@@ -198,7 +230,7 @@ def clip_dir(store):
     return os.path.join(store.root, "clips")
 
 
-def make(store, ms, kind, video_dir, log=print):
+def make(store, ms, kind, video_dir, log=print, progress=None):
     """試合の並びから kind の場面を集めて1本にする。書いたファイルのパス（場面が無ければ None）。"""
     segs, names = [], []
     for m in ms:
@@ -214,7 +246,7 @@ def make(store, ms, kind, video_dir, log=print):
     stem = os.path.splitext(ms[0]["_file"])[0] if len(ms) == 1 else f"最近{len(ms)}試合"
     out = os.path.join(clip_dir(store), f"{stem}_{KINDS[kind]}.mp4")
     log(f"{KINDS[kind]}を {len(segs)}場面 まとめています…")
-    p = write(segs, out, log)
+    p = write(segs, out, log, progress)
     if p:
         with open(os.path.splitext(p)[0] + ".txt", "w", encoding="utf-8") as f:  # どの場面が入っているか
             f.write("\n".join(names))

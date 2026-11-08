@@ -41,6 +41,7 @@ class State:
         self.weapons, self.weapons_file = None, None  # この試合の8人のブキ、保存された試合の名前
         self.last_saved = None  # 最後に保存した試合（次の試合が始まっても残す）
         self.save_status = ""
+        self.clip_jobs = {}
         self.notices = deque(maxlen=20)
         self.logs = deque(maxlen=300)
         self.seq = 0
@@ -104,8 +105,12 @@ class State:
 
     def snapshot(self, since):
         with self.lock:
+            now = time.time()
+            self.clip_jobs = {f: j for f, j in self.clip_jobs.items()
+                              if j["ended_at"] is None or now - j["ended_at"] < 120}
             return {"state": self.state, "wp": self.wp.copy(), "wp_kind": self.wp_kind, "reading": self.reading,
-                    "wp_at": self.wp_at, "now": time.time(), "save_status": self.save_status,
+                    "wp_at": self.wp_at, "now": now, "save_status": self.save_status,
+                    "clip_jobs": {f: j.copy() for f, j in self.clip_jobs.items()},
                     "can_start": self.can_start, "mode": self.mode, "view": self.view,
                     "weapons": self.weapons, "weapons_file": self.weapons_file, "last_saved": self.last_saved,
                     "version": self.version, "seq": self.seq,
@@ -175,6 +180,8 @@ APP_CSS = """<style>
 .clip-actions { border:0; padding:0; margin:0; }
 .clip-actions legend { margin-bottom:6px; }
 .clip-item { margin-top:10px; padding-top:10px; border-top:1px solid #eee; }
+.clip-progress-banner { position:sticky; top:44px; z-index:4; padding:6px 16px; background:#e5edf9; font-size:13px; }
+body.compact .clip-progress-banner { top:0; }
 .lm-title { font-size:20px; margin:6px 0 10px; }
 .lm-stage { margin:-4px 0 10px; } .lm-stage img { vertical-align:middle; background:#333; border-radius:4px; }
 .lm-nums { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
@@ -240,6 +247,7 @@ body.compact .logs { max-height:120px; }
 APP_JS = """<script>
 let since = 0, version = window.summaryVersion, inMatch = false;
 let historyPage = 0, historyRequest = 0, detailRequest = 0, activeFile = null, lastSaved = null;
+let clipJobs = {};
 async function recam() {
   if (inMatch && !confirm("試合の途中です。読むのをやめると、この試合は途中までで保存されます。よいですか？")) return;
   await fetch("/api/stop_camera", { method: "POST", body: "{}" });
@@ -250,17 +258,53 @@ async function makeClips(button, file, kind) {
   const status = section.querySelector(".clip-status");
   const actions = button.closest("fieldset");
   actions.disabled = true;
-  status.textContent = button.textContent + "を作成しています…";
+  section.dataset.clipPending = clipJobs[file]?.id || "";
+  status.textContent = button.textContent + "を作成中 · 0%";
   try {
     const r = await fetch("/api/clips", { method: "POST", body: JSON.stringify({ file, kind }) });
-    const body = await r.text();
-    if (!r.ok) throw new Error(body);
-    section.querySelector(".clip-list").innerHTML = body;
-    status.textContent = "書き出しが完了しました。";
+    if (!r.ok) throw new Error(await r.text());
+    status.textContent = "書き出しが完了しました · 100%";
   } catch (e) {
     status.textContent = e.message || "書き出しの状態を確認できませんでした。";
   } finally {
+    delete section.dataset.clipPending;
     actions.disabled = false;
+  }
+}
+function clipProgressText(job) {
+  if (job.state === "error") return `${job.name} · ${job.message}`;
+  return `${job.name} · ${job.message} · ${job.percent}%`;
+}
+function showClipProgress(jobs, now) {
+  clipJobs = jobs;
+  const banner = $("clip-progress-banner");
+  const recent = Object.values(jobs).filter(j => j.ended_at === null || now - j.ended_at < 8);
+  const text = recent.map(clipProgressText).join(" ／ ");
+  banner.hidden = !text;
+  if (banner.textContent !== text) banner.textContent = text;
+
+  const section = document.querySelector("#lastbody .clip-exports");
+  const job = section && jobs[section.dataset.file];
+  if (!job || section.dataset.clipPending === job.id) return;
+  const actions = section.querySelector("fieldset");
+  if (actions) actions.disabled = job.state === "running";
+  const status = section.querySelector(".clip-status");
+  const label = section.dataset.clipListError === job.id ?
+    "書き出し完了 · 100%。試合詳細を開き直すと動画を確認できます。" : clipProgressText(job);
+  if (status.textContent !== label) status.textContent = label;
+  if (job.state === "done" && section.dataset.clipResult !== job.id) {
+    section.dataset.clipResult = job.id;
+    refreshClipList(section, job.id);
+  }
+}
+async function refreshClipList(section, id) {
+  try {
+    const r = await fetch("/api/clip-list?file=" + encodeURIComponent(section.dataset.file));
+    if (!r.ok) throw new Error();
+    const body = await r.text();
+    if (section.dataset.clipResult === id) section.querySelector(".clip-list").innerHTML = body;
+  } catch (e) {
+    if (section.dataset.clipResult === id) section.dataset.clipListError = id;
   }
 }
 function playExport(button) {
@@ -320,6 +364,7 @@ async function setMatchMode(file, mode) {
     '<option value="ガチ">ガチだけ</option><option value="エンジョイ">エンジョイだけ</option><option value="すべて">すべて</option></select></label>';
   h.appendChild(d);
   document.querySelector("nav").insertAdjacentHTML("afterend", '<div id="reloadbar" class="reloadbar">集計に新しい記録があります <button class="btn" onclick="refreshSummary()">集計を更新</button></div>');
+  $("reloadbar").insertAdjacentHTML("afterend", '<div id="clip-progress-banner" class="clip-progress-banner" role="status" hidden></div>');
 })();
 async function setStage(file, name) {
   const r = await fetch("/api/stage", { method: "POST", body: JSON.stringify({ file: file, name: name.trim() }) });
@@ -551,6 +596,7 @@ async function poll() {
     const d = await (await fetch("/api/live?since=" + since)).json();
     showState(d);
     showWeapons(d);
+    showClipProgress(d.clip_jobs, d.now);
     for (const [i, t] of d.logs) {
       const li = document.createElement("li"); li.textContent = t; $("logs").appendChild(li);
     }
@@ -657,7 +703,6 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
     root = pathlib.Path(store.root).resolve()
     cache = {"version": None, "html": None}
     cache_lock = threading.Lock()
-    clip_jobs = set()
 
     def link(path):
         p = pathlib.Path(path).resolve()
@@ -759,6 +804,11 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                     f = urllib.parse.parse_qs(u.query).get("file", [None])[0]
                     body = lastmatch.html_for(store, link, get_video_dir(), f)
                     self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
+                elif u.path == "/api/clip-list":
+                    f = urllib.parse.parse_qs(u.query).get("file", [""])[0]
+                    m = store.load(os.path.join(store.mdir, os.path.basename(f)))
+                    body = lastmatch.exported_clips(store, m, link)
+                    self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/live":
                     since = int(urllib.parse.parse_qs(u.query).get("since", ["0"])[0])
                     self._send(200, json.dumps(st.snapshot(since), ensure_ascii=False).encode("utf-8"),
@@ -833,11 +883,13 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                     if kind not in clips.KINDS:
                         raise ValueError("種類が違います")
                     m = store.load(os.path.join(store.mdir, os.path.basename(str(body["file"]))))
-
+                    file = m["_file"]
+                    job = {"id": str(time.monotonic_ns()), "name": clips.KINDS[kind], "state": "running",
+                           "percent": 0, "message": "準備中", "ended_at": None}
                     with st.lock:
-                        busy = m["_file"] in clip_jobs
+                        busy = st.clip_jobs.get(file, {}).get("state") == "running"
                         if not busy:
-                            clip_jobs.add(m["_file"])
+                            st.clip_jobs[file] = job
                     if busy:
                         self._send(409, "この試合の動画を作成中です。".encode("utf-8"), "text/plain; charset=utf-8")
                         return
@@ -846,18 +898,25 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         with st.lock:
                             st._push(st.logs, text)
 
-                    try:
-                        path = clips.make(store, [m], kind, get_video_dir(), log)
-                        if path:
-                            result = lastmatch.exported_clips(store, m, link)
-                            self._send(200, result.encode("utf-8"), "text/html; charset=utf-8")
-                        else:
-                            message = f"{clips.KINDS[kind]}に該当する録画を見つけられませんでした。"
-                            log(message)
-                            self._send(422, message.encode("utf-8"), "text/plain; charset=utf-8")
-                    finally:
+                    def progress(percent, phase):
                         with st.lock:
-                            clip_jobs.discard(m["_file"])
+                            job.update(percent=percent, message=phase)
+
+                    try:
+                        path = clips.make(store, [m], kind, get_video_dir(), log, progress)
+                        if path:
+                            code, message = 200, "書き出し完了"
+                        else:
+                            code, message = 422, "該当する録画を見つけられませんでした。"
+                    except Exception as e:
+                        code, message = 500, f"書き出せませんでした: {e}"
+                    with st.lock:
+                        job.update(state="done" if code == 200 else "error", ended_at=time.time(), message=message)
+                        if code == 200:
+                            job["percent"] = 100
+                        else:
+                            st._push(st.logs, f"{job['name']}: {message}")
+                    self._send(code, message.encode("utf-8"), "text/plain; charset=utf-8")
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
                     f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None
