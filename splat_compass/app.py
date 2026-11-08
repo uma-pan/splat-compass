@@ -45,7 +45,7 @@ class State:
         self.version = 0      # まとめが変わるたびに増える（画面が読み直す合図）
         self.reading = False  # 映像を読んでいるか
         self.can_start = False  # 画面からカメラを選んで読み始められるか
-        self.mode, self.view = "Xマッチ", "Xマッチ"  # これから保存する試合の種類、まとめで見る記録
+        self.mode, self.view = "ガチ", "ガチ"  # これから保存する試合の種類、まとめで見る記録
 
     def _write(self, text):
         if not self.log_dir:
@@ -109,9 +109,10 @@ LIVE_HTML = """
   <button id="compact" class="btn">小さくする</button>
 </div>
 <div id="notice" class="notice"></div>
-<div class="modebar">この試合の記録: <button class="btn mode" data-mode="Xマッチ" onclick="setConfig({mode:'Xマッチ'})">Xマッチ</button>
-  <button class="btn mode" data-mode="それ以外" onclick="setConfig({mode:'それ以外'})">それ以外</button>
-  <span class="muted">（本気でやる記録とそうでない記録を分けます。保存するときの選択で記録します）</span></div>
+<div class="modebar">この試合の記録: <button class="btn mode" data-mode="ガチ" onclick="setConfig({mode:'ガチ'})">ガチ</button>
+  <button class="btn mode" data-mode="エンジョイ" onclick="setConfig({mode:'エンジョイ'})">エンジョイ</button>
+  <span class="muted">（本気でやる記録と、そうでない記録を分けて集計します）</span></div>
+<label class="muted" style="display:block;margin-bottom:8px"><input type="checkbox" id="sound" onchange="try{localStorage.setItem('sc-sound', this.checked ? '1' : '0')}catch(e){}"> 通知で音を鳴らす</label>
 <div id="reloadbar" class="reloadbar">まとめが新しくなりました <button class="btn" onclick="location.reload()">読み直す</button></div>
 <div id="campick" class="card campick"><h3>読み取るカメラ</h3>
   <p class="muted">キャプチャーボードや OBS の仮想カメラを選んでください。スプラトゥーンの画面が映っているものを選びます。</p>
@@ -145,7 +146,9 @@ APP_CSS = """<style>
 .btn { border:1px solid #d1d5db; background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:13px; }
 .lv-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
 .wpbig { font-size:40px; font-weight:bold; line-height:1.1; }
-.modebar { margin-bottom:10px; } .btn.mode.on { background:#1f6feb; color:#fff; border-color:#1f6feb; }
+nav { overflow-x:auto; } nav button { white-space:nowrap; flex:0 0 auto; }
+header { flex-wrap:wrap; } .viewsel { white-space:nowrap; }
+.modebar { margin-bottom:10px; } .btn.lm-mode.on, .btn.mode.on { background:#1f6feb; color:#fff; border-color:#1f6feb; }
 .viewsel { position:absolute; right:16px; top:14px; font-size:13px; color:#fff; } .viewsel select { font-size:13px; }
 .reloadbar { display:none; margin-bottom:10px; color:#555; } .reloadbar.on { display:block; }
 .campick { display:none; margin-bottom:12px; } .campick.on { display:block; }
@@ -212,7 +215,7 @@ async function setMatchMode(file, mode) {
   h.style.position = "relative";
   const d = document.createElement("div"); d.className = "viewsel";
   d.innerHTML = '見る記録 <select id="viewsel" onchange="setConfig({view: this.value})">' +
-    '<option value="Xマッチ">Xマッチだけ</option><option value="それ以外">それ以外だけ</option><option value="すべて">すべて</option></select>';
+    '<option value="ガチ">ガチだけ</option><option value="エンジョイ">エンジョイだけ</option><option value="すべて">すべて</option></select>';
   h.appendChild(d);
 })();
 async function setStage(file, name) {
@@ -237,7 +240,12 @@ function lmPlay(src, a, b, label) {
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest('nav button[data-tab="last"]');
   if (b && lastShown === null) { lastShown = "first"; loadLast(); }
+  if (e.target.closest && e.target.closest('nav button[data-tab="wcheck"]')) loadWcheck();  // 開くたびに新しい試合を読む
 });
+async function loadWcheck() {
+  const r = await fetch("/api/wcheck");
+  $("wcheckbody").innerHTML = await r.text();
+}
 async function findCameras() {
   $("camlist").textContent = "探しています…（数秒かかります）";
   const cams = await (await fetch("/api/cameras")).json();
@@ -264,6 +272,8 @@ window.addEventListener("pywebviewready", () => {
 try { if (localStorage.getItem("sc-compact")) document.body.classList.add("compact"); } catch (e) {}
 
 function beep() {
+  let on = false; try { on = localStorage.getItem("sc-sound") === "1"; } catch (e) {}
+  if (!on) return;  // 通知の音は、画面で選んだときだけ鳴らす
   try {
     const a = new (window.AudioContext || window.webkitAudioContext)(), o = a.createOscillator(), g = a.createGain();
     o.frequency.value = 880; o.connect(g); g.connect(a.destination); g.gain.value = 0.1;
@@ -315,6 +325,8 @@ function showState(d) {
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
   if (lastShown === null && $("last") && $("last").classList.contains("on")) { lastShown = d.last_saved || "first"; loadLast(); }
+  if (!window._wc && $("wcheck") && $("wcheck").classList.contains("on")) { window._wc = true; loadWcheck(); }
+  if ($("sound") && !window._snd) { window._snd = true; try { $("sound").checked = localStorage.getItem("sc-sound") === "1"; } catch (e) {} }
   // 新しい試合が保存されたら、「直前の試合」タブをその試合に入れ替える（試合中は作らない）
   if (d.last_saved && lastShown !== null && lastShown !== d.last_saved && !st.in_match) {
     lastShown = d.last_saved; if ($("last").classList.contains("on")) loadLast(); else lastShown = null;
@@ -517,7 +529,7 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
             cache["html"] = report.render(store, get_video_dir(), link=link,
                                           first_tabs=[("live", "試合中", LIVE_HTML),
                                                       ("last", "直前の試合", '<div id="lastbody"><p class="muted">読み込んでいます…</p></div>'),
-                                                      ("wcheck", "ブキの確認", review_html(store, link))],
+                                                      ("wcheck", "ブキの確認", '<div id="wcheckbody"><p class="muted">読み込んでいます…</p></div>')],
                                           head=APP_CSS, script=APP_JS)
             cache["version"] = v
         return cache["html"]
@@ -552,6 +564,12 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         out.append({"index": i, "w": w, "h": h,
                                     "img": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""})
                     self._send(200, json.dumps(out).encode("utf-8"), "application/json")
+                elif u.path == "/api/wcheck":
+                    try:
+                        body = review_html(store, link)
+                    except Exception as e:
+                        body = f'<p class="muted">作れませんでした: {report.ESC(str(e))}</p>'
+                    self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/last":
                     from . import lastmatch
                     f = urllib.parse.parse_qs(u.query).get("file", [None])[0]

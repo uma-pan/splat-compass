@@ -106,9 +106,7 @@ def load_base(store):
     """普段の自分の1分あたりの回数。試合が少なければ None。"""
     try:
         from . import feedback
-        from .storage import mode_of
-        mode = store.mode()  # 今の試合と同じ種類の試合で「普段」を出す
-        ms = sorted([m for m in store.matches(all=True) if m.get("video_end") and not m.get("interrupted") and mode_of(m) == mode],
+        ms = sorted([m for m in store.matches(all=True) if m.get("video_end") and not m.get("interrupted")],
                     key=lambda m: m.get("played_at", ""))
         return feedback.baseline(ms)
     except Exception:

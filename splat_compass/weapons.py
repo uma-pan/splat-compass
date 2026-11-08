@@ -264,12 +264,16 @@ def labels_mtime(store):
         return 0
 
 
-def review(store, last=20):
-    """直近の試合の8人のブキの読み取り結果。[(試合, [(キー, 名前, 確かさ, 自分から見た側) ×8 / 無い枠は None])]"""
-    ms = [m for m in store.matches() if m.get("weapon_icons")]
-    ms.sort(key=lambda m: m.get("played_at", ""), reverse=True)
-    ms = ms[:last]
-    namer = Namer(store)
+def review(store, last=20, only=None):
+    """直近の試合の8人のブキの読み取り結果。[(試合, [(キー, 名前, 確かさ, 自分から見た側) ×8 / 無い枠は None])]
+    only を渡すとその試合だけ。"""
+    if only is not None:
+        ms = [only] if only.get("weapon_icons") else []
+    else:
+        ms = [m for m in store.matches(all=True) if m.get("weapon_icons")]
+        ms.sort(key=lambda m: m.get("played_at", ""), reverse=True)
+        ms = ms[:last]
+    namer = shared_namer(store)
     out = []
     for m in ms:
         icons = load_strip(store, m)

@@ -10,12 +10,17 @@ import os
 from .tracker import ROW_HEADER
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "splat-compass-data")
-MODES = ("Xマッチ", "それ以外")  # 本気でやる記録（Xマッチ）と、そうでない記録（バンカラ・ナワバリ・練習など）を分ける
+MODES = ("ガチ", "エンジョイ")  # 本気でやる記録と、そうでない記録（練習・遊びなど）を分ける
+_OLD_MODE = {"Xマッチ": "ガチ", "それ以外": "エンジョイ"}  # 前の呼び方
+
+
+def mode_name(v):
+    return _OLD_MODE.get(v, v)
 
 
 def mode_of(m):
-    """試合の種類。種類を記録する前の試合は Xマッチとみなす。"""
-    return m.get("mode") or "Xマッチ"
+    """試合の種類。種類を記録する前の試合はガチとみなす。"""
+    return mode_name(m.get("mode")) or "ガチ"
 
 
 class Store:
@@ -113,7 +118,7 @@ class Store:
         return path
 
     def matches(self, all=False):
-        """試合の記録の一覧。設定の「見る記録」（Xマッチだけ・それ以外だけ）で絞る。all=True なら絞らない
+        """試合の記録の一覧。設定の「見る記録」（ガチだけ・エンジョイだけ）で絞る。all=True なら絞らない
         （勝率モデルやブキの見本は、どの試合でも同じように使えるので全部使う）。"""
         view = None if all else self.view()
         out = []
@@ -127,14 +132,14 @@ class Store:
         return out
 
     def view(self):
-        """まとめや振り返りで見る記録の種類（"Xマッチ" / "それ以外"）。None なら全部。"""
-        v = self.load_config().get("view", "Xマッチ")
+        """まとめや振り返りで見る記録の種類（"ガチ" / "エンジョイ"）。None なら全部。"""
+        v = mode_name(self.load_config().get("view", "ガチ"))
         return v if v in MODES else None
 
     def mode(self):
         """これから保存する試合の種類（画面で切り替える）。"""
-        v = self.load_config().get("mode", "Xマッチ")
-        return v if v in MODES else "Xマッチ"
+        v = mode_name(self.load_config().get("mode", "ガチ"))
+        return v if v in MODES else "ガチ"
 
     def set_result(self, fname, result):
         """勝敗を手で直す（読み違えていたとき）。"""

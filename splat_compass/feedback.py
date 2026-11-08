@@ -191,15 +191,13 @@ def match_feedback(m, base, store=None):
 
 
 def for_latest(store, last=1, all_modes=True):
-    """新しい試合から順に [(試合, 振り返り)]。普段の自分は、同じ種類（Xマッチ・それ以外）の前の試合から出す。
+    """新しい試合から順に [(試合, 振り返り)]。普段の自分は、種類に関係なく前の試合から出す。
     all_modes=False なら、設定の「見る記録」の試合だけを並べる。"""
-    from .storage import mode_of
     ms = sorted([m for m in store.matches(all=all_modes) if m.get("video_end") and not m.get("interrupted")],
                 key=lambda m: m.get("played_at", ""))
     out = []
     for i in range(len(ms) - 1, max(len(ms) - 1 - last, -1), -1):
-        same = [x for x in ms[:i] if mode_of(x) == mode_of(ms[i])]
-        base = baseline(same)
+        base = baseline(ms[:i])  # 普段の自分は、種類（ガチ・エンジョイ）に関係なく全部の試合から
         out.append((ms[i], match_feedback(ms[i], base, store)))
     return out
 

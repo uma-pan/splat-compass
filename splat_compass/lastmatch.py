@@ -15,6 +15,7 @@ import os
 
 from . import clock, coach, feedback, learning, weapons, winprob
 from .hud import SLOT_NAMES, STAGES
+from .storage import mode_of
 
 ESC = html.escape
 
@@ -72,8 +73,7 @@ def html_for(store, link, video_dir=None, file=None):
     m = next((x for x in ms if x["_file"] == file), None) if file else None
     m = m or ms[-1]
     i = ms.index(m)
-    from .storage import mode_of
-    base = feedback.baseline([x for x in ms[:i] if mode_of(x) == mode_of(m)])  # 普段の自分は同じ種類の試合から
+    base = feedback.baseline(ms[:i])  # 普段の自分は、種類に関係なく全部の試合から
     me = m.get("me_slot")
     dur = m["video_end"] - m["video_start"]
     res = m.get("result") or "勝敗不明"
@@ -84,7 +84,7 @@ def html_for(store, link, video_dir=None, file=None):
     # 試合の選び直し
     opts = "".join(f'<option value="{ESC(x["_file"])}"{" selected" if x is m else ""}>'
                    f'{ESC(x.get("played_at", "")[5:16].replace("T", " "))} {ESC(x.get("rule") or "ルール不明")} {ESC(x.get("result") or "")}'
-                   f'{"（それ以外）" if x.get("mode") == "それ以外" else ""}</option>'
+                   f'{"（エンジョイ）" if mode_of(x) == "エンジョイ" else ""}</option>'
                    for x in rec)
     out = [f'<div class="lm-head"><select onchange="loadLast(this.value)">{opts}</select></div>']
     names = weapons.weapons_of(store, m) if m.get("weapon_icons") else None
@@ -93,9 +93,10 @@ def html_for(store, link, video_dir=None, file=None):
     out.append(f'<h2 class="lm-title">{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
                f'{ESC(stage or "")}　<span class="res-{ESC(res)}">{ESC(res)}</span>　<span class="muted">{_mmss(dur)}'
                f'{"　" + ESC(my_weapon) if my_weapon else ""}</span></h2>')
-    mode = m.get("mode") or "Xマッチ"
-    btns = "".join(f'<button class="btn mode{" on" if mode == k else ""}" onclick="setMatchMode({ESC(json.dumps(m["_file"]))}, {ESC(json.dumps(k))})">{k}</button> '
-                   for k in ("Xマッチ", "それ以外"))
+    from .storage import MODES
+    mode = mode_of(m)
+    btns = "".join(f'<button class="btn lm-mode{" on" if mode == k else ""}" onclick="setMatchMode({ESC(json.dumps(m["_file"]))}, {ESC(json.dumps(k))})">{k}</button> '
+                   for k in MODES)
     out.append(f'<div class="lm-stage">この試合の記録: {btns}</div>')
     stem = os.path.splitext(m["_file"])[0]
     crop = os.path.join(store.root, "stages", stem + ".png")
@@ -197,8 +198,10 @@ def html_for(store, link, video_dir=None, file=None):
                        '<table><tr><th>時刻</th><th>勝率</th><th style="text-align:left">そのとき起きたこと</th><th></th></tr>'
                        + "".join(rows) + "</table></div>")
 
-    # 8人
-    if names:
+    # 8人（ブキの名前はここで直せる）
+    rv = weapons.review(store, only=m)[0]
+    if rv:
+        row = rv[0][1]
         deaths_by = {s: 0 for s in SLOT_NAMES}
         sp_by = {s: 0 for s in SLOT_NAMES}
         for e in m["events"]:
@@ -206,15 +209,25 @@ def html_for(store, link, video_dir=None, file=None):
                 deaths_by[e[2]] += 1
             elif e[3] == "スペシャル発動":
                 sp_by[e[2]] += 1
-        rows = []
-        for k, s in enumerate(SLOT_NAMES):
-            side = "味方" if k < 4 else "相手"
-            tag = "（自分）" if s == me else ""
-            rows.append(f'<tr><td>{side}</td><td style="text-align:left">{ESC(names[k] or "分からない")}{tag}</td>'
-                        f'<td>{deaths_by[s]}</td><td>{sp_by[s]}</td></tr>')
-        out.append('<div class="card wide"><h3>8人</h3><table><tr><th></th><th style="text-align:left">ブキ</th>'
-                   '<th>倒された</th><th>スペシャル</th></tr>' + "".join(rows) + "</table>"
-                   '<p class="muted">倒した数は自分の分しか読めないので、倒された回数とスペシャルの回数を出しています。</p></div>')
+        strip = link(os.path.join(store.root, "weapons", m["weapon_icons"]))
+        _, all_names = weapons.review(store, last=0)
+        dl = '<datalist id="lmwnames">' + "".join(f'<option value="{ESC(n)}">' for n in all_names) + "</datalist>"
+
+        def cell(k):
+            s = SLOT_NAMES[k]
+            w = row[k]
+            if w is None:
+                return '<div class="wcell"></div>'
+            key, n, conf, side = w
+            return (f'<div class="wcell{" me" if s == me else ""}">'
+                    f'<div class="wimg" style="background-image:url(\'{strip}\');background-position:-{k * 60}px 0"></div>'
+                    f'<input class="{conf}" list="lmwnames" value="{ESC(n or "")}" placeholder="{"分からない" if conf == "none" else ""}" data-key="{ESC(key)}">'
+                    f'<div class="saved"></div><div class="muted">倒された {deaths_by[s]}・SP {sp_by[s]}</div></div>')
+        out.append('<div class="card wide"><h3>8人</h3>' + dl
+                   + '<div class="wrow"><span class="side">味方</span>' + "".join(cell(k) for k in range(4)) + "</div>"
+                   + '<div class="wrow"><span class="side">相手</span>' + "".join(cell(k) for k in range(4, 8)) + "</div>"
+                   + '<p class="muted">ブキの名前が違っていたら直してください（次から見本として使います）。黄色は候補どまり、赤は分からないブキ、'
+                     '太字は自分です。倒した数は自分の分しか読めないので、倒された回数とスペシャルの回数を出しています。</p></div>')
 
     # マップ
     shots = m.get("map_shots") or []
