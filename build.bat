@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem 配る版（exe）を作る。できたものは dist\splat-compass フォルダ（中の splat-compass.exe を開く）
 cd /d "%~dp0"
 python -m pip install -q -r requirements.txt pyinstaller
