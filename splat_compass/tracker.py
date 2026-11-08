@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 
 from .clock import TURF_RULE
-from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, asari_slots, me_respawning, me_special_full,
+from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, asari_slots, me_respawning, me_special_full, read_asari_clams,
                   bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
@@ -91,6 +91,7 @@ class Match:
     icons: list = field(default_factory=lambda: [None] * 8)  # 8人のブキのアイコン（生きている時の絵）
     checkpoints: list = None  # ヤグラ・ホコのチェックポイントの位置（-1〜+1）
     objective: list = field(default_factory=list)  # 1秒ごとの [時刻, ヤグラ・ホコの位置(-1〜1), アサリのゴールが開いている]
+    clam_timeline: list = field(default_factory=list)  # ガチアサリのみ。約1秒ごとの [時刻, 8枠の所持表示]
     interrupted: bool = False  # 勝敗の表示が出ないまま終わった（回線落ち・録画の途切れなど）
     events: list = field(default_factory=list)
 
@@ -214,9 +215,11 @@ class Tracker:
                 self.match.killcams.append((t, kc))
         self.resp_prev = resp
         self._kills(t, img)
+        rule = self.match.rule
+        if rule == "ガチアサリ":
+            slots = asari_slots(img, slots, self.cur)
         if t - self.last_count_t >= 1.0:
             self.last_count_t = t
-            rule = self.match.rule
             if rule in ("ガチヤグラ", "ガチホコ"):
                 # 固定位置にカウントが無いので、背景を数字と読み違えることがある。
                 self._bubble_counts(t, img)
@@ -251,11 +254,11 @@ class Tracker:
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), 0])
             elif rule == "ガチアサリ":
                 self.match.objective.append([round(t, 1), None, int(asari_goal_open(img))])
+                clams = read_asari_clams(img, slots) if hud_on and not on_map else [None] * len(SLOT_NAMES)
+                self.match.clam_timeline.append([round(t, 1), *clams])
             elif rule is None:  # ルールが読めなかった試合は両方記録しておく
                 p = read_objective_pos(img)
                 self.match.objective.append([round(t, 1), None if p is None else round(p, 3), int(asari_goal_open(img))])
-        if self.match.rule == "ガチアサリ":
-            slots = asari_slots(img, slots, self.cur)
         self._update_slots(t, slots)
         rel = t - self.match.start
         go = self.match.go
@@ -456,6 +459,7 @@ class Tracker:
         self.match.trim = trim
         """試合の終わりの演出（Finish! の帯や上部の表示が消えていく途中）で、倒された・溜まったと読み違えたものを捨てる。"""
         m = self.match
+        m.clam_timeline = [row for row in m.clam_timeline if row[0] <= t - trim]
         drop = [e for e in m.events if e.t > t - trim]
         if drop:
             m.events = [e for e in m.events if e.t <= t - trim]

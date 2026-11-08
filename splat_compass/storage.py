@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 
+from .hud import SLOT_NAMES
 from .tracker import ROW_HEADER
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "splat-compass-data")
@@ -126,6 +127,9 @@ class Store:
             "result_check": result_check,
             "kills": [{"t": round(t, 1), "rel": round(t - m.start, 1)} for t in getattr(m, "kills", [])],
         }
+        if m.rule == "ガチアサリ":
+            data["clam_columns"] = ["時刻", *SLOT_NAMES]
+            data["clam_timeline"] = getattr(m, "clam_timeline", [])
         _write_json(path, data)
         return path
 

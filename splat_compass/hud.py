@@ -76,6 +76,12 @@ def _matches_shape(mask, shapes, threshold):
                for shape in shapes)
 
 
+def _power_clam_score(marker):
+    mask = (marker.min(2) > 170).astype(np.uint8)
+    return max(cv2.minMaxLoc(cv2.matchTemplate(mask, shape, cv2.TM_CCOEFF_NORMED))[1]
+               for shape in _POWER_CLAMS)
+
+
 def asari_slots(img, slots, previous):
     """暗いブキやガチアサリの印があるときも、×が見えた枠だけをデスとする。"""
     corrected = list(slots)
@@ -91,9 +97,71 @@ def asari_slots(img, slots, previous):
         corrected[k] = None  # 既知の生存・スペシャル状態は、不明なコマで変えない
         if previous is None or previous[k] == DEAD:
             marker = img[86:126, x - 45:x + 22]
-            if _matches_shape((marker.min(2) > 170).astype(np.uint8), _POWER_CLAMS, 0.50):
+            if _power_clam_score(marker) >= 0.50:
                 corrected[k] = ALIVE
     return corrected
+
+
+def _small_clams(box):
+    """黄緑色の殻と黒い縁を探し、1段目に4個、2段目に最大3個を読む。"""
+    r, g, b = np.moveaxis(box.astype(np.int16), -1, 0)
+    yellow = ((r > 95) & (g > 95) & (2 * b < np.minimum(r, g)) & (np.abs(r - g) < 75)).astype(np.uint8)
+    dark = box.max(2) < 100
+    _, _, stats, _ = cv2.connectedComponentsWithStats(yellow)
+    shells = []
+    for x, y, w, h, area in stats[1:]:
+        if not (x >= 4 and 8 <= y <= 30 and 6 <= w <= 19 and 6 <= h <= 14 and 28 <= area <= 160):
+            continue
+        left = dark[y + 1:y + h - 1, x - 4:x].mean()
+        bottom = dark[y + h:y + h + 4, x + 2:x + w - 2]
+        if left >= 0.18 or (bottom.size and bottom.mean() >= 0.45):
+            shells.append((int(x), int(y), int(w), float(left)))
+    shells.sort()
+
+    def row(first, limit):
+        end = first[0] + first[2]
+        count = 1
+        for x, y, w, _ in shells:
+            if x <= first[0] or abs(y - first[1]) > 4:
+                continue
+            if -2 <= x - end <= 4 and w <= 12:
+                end = x + w
+                count += 1
+            elif 5 <= x - end <= 14 and w <= 12:
+                return None  # 途中の1個が隠れている可能性がある
+        return count if count <= limit else None
+
+    first = next((s for s in shells if 8 <= s[1] <= 18 and 11 <= s[2] and s[3] >= 0.42), None)
+    if first is None:
+        return None if shells else 0
+    top = row(first, 4)
+    if top is None:
+        return None
+    second = next((s for s in shells if abs(s[0] - first[0]) <= 3 and 7 <= s[1] - first[1] <= 14
+                   and s[2] >= 11 and s[3] >= 0.42), None)
+    if second is None:
+        return top
+    bottom = row(second, 3)
+    return top + bottom if top == 4 and bottom is not None else None
+
+
+def read_asari_clams(img, slots):
+    """8枠の所持表示。通常アサリは0〜7、ガチアサリは 'power'、読み取れない枠は None。"""
+    result = []
+    for x, status in zip(SLOT_X, slots):
+        if status == DEAD:
+            result.append(0)
+            continue
+        box = img[86:130, x - 62:x + 40]
+        power = _power_clam_score(box)
+        if power >= 0.42:
+            result.append("power")
+            continue
+        count = _small_clams(box)
+        if count == 0 and (status is None or power >= 0.32):
+            count = None
+        result.append(count)
+    return result
 
 
 TIMER_BOX = (895, 45, 130, 55)  # 画面上部中央の残り時間（黒い地に白い数字）
