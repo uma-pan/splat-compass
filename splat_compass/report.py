@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import analyze, area, feedback, killcam, objective, scenes, weapons, winprob
+from . import analyze, area, coach, feedback, killcam, objective, scenes, weapons, winprob
 from .storage import Store
 
 ESC = html.escape
@@ -450,10 +450,35 @@ def section_feedback(store, link=None, app=False):
                    f'<button onclick="fixResult(\'{f}\', \'勝ち\')">勝ちに直す</button>'
                    f'<button onclick="fixResult(\'{f}\', \'負け\')">負けに直す</button>'
                    + ('<span class="muted">（手で直した）</span>' if m.get("result_fixed") else "") + "</div>")
+        ds = coach.deaths(m, coach.wp_func(store, m)) or []
+        dl = ""
+        if ds:
+            trs = "".join(f'<tr><td>{coach._mmss(d["rel"])}</td><td style="text-align:left">{ESC(coach.describe(d))}</td></tr>' for d in ds)
+            dl = (f'<details><summary class="muted">倒された場面 {len(ds)}回</summary>'
+                  f'<table><tr><th>時刻</th><th style="text-align:left">そのときの状況</th></tr>{trs}</table></details>')
         blocks.append(f'<section><h2>{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
-                      f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2>{fix}<ul class="fb">{lis}</ul></section>')
+                      f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2>{fix}<ul class="fb">{lis}</ul>{dl}</section>')
     return ('<p class="muted">新しい15試合を、それぞれの試合より前の自分（普段の自分）と比べて、目立ったところだけを挙げています。'
-            '時刻は試合開始からの秒です。</p>' + "".join(blocks))
+            '時刻は試合開始からの秒です。</p>' + trend_card(store) + "".join(blocks))
+
+
+def trend_card(store):
+    """最近の倒され方を、それより前の自分と比べる表。"""
+    try:
+        rows, nn, no, r, o = coach.trend(store)
+    except Exception:
+        return ""
+    if not nn or not no:
+        return ""
+    trs = []
+    for label, n, sh, prev in rows:
+        diff = (sh - prev) * 100 if prev is not None else 0
+        mark = "多くなった" if diff >= 8 else ("少なくなった" if diff <= -8 else "")
+        trs.append([ESC(label), f"{n}回", pct(sh), pct(prev) if prev is not None else "—", mark])
+    return card(f"倒され方の傾向（最近{r}試合と、それより前の{o}試合）",
+                table(["倒されたときの状況", "最近の回数", "最近の割合", "前の割合", ""], trs)
+                + '<p class="muted">1回の倒され方に当てはまるものは全部数えるので、割合を足すと100%を超えます。'
+                  '「人数が不利」は倒される直前の上の表示の人数（自分を含む）で見ています。</p>', wide=True)
 
 
 PAGE = """<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><title>splat-compass</title>

@@ -91,6 +91,8 @@ def baseline(history):
     rate["matches"] = len(ns)
     kn = [x for x in ns if x["kills"] is not None]
     rate["kills"] = sum(len(x["kills"]) for x in kn) / sum(x["mins"] for x in kn) if len(kn) >= 5 else None
+    from . import coach
+    rate["death_shares"] = coach.shares([coach.deaths(m) or [] for m in history])[0]
     return rate
 
 
@@ -154,6 +156,11 @@ def match_feedback(m, base, store=None):
             name, k = c.most_common(1)[0]
             if k >= 3:
                 out.append(("情報", f"{name}に{k}回倒された"))
+    try:
+        from . import coach
+        out += coach.match_lines(m, base.get("death_shares"), coach.wp_func(store, m) if store is not None else None)
+    except Exception:
+        pass
     if not out:
         out.append(("情報", "普段と比べて大きく違うところはありませんでした"))
     if store is not None:
