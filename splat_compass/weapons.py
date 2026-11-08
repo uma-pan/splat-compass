@@ -120,15 +120,27 @@ def key_of(m, k):
 
 
 def all_icons(store, ms=None):
-    """[(キー, 絵, 試合, 枠番号)]"""
+    """[(キー, 絵, 試合, 枠番号)]
+    ms を渡さないときは、今の試合の記録に加えて、名前を付けたのに試合の記録が無くなった絵（読み直しで試合の
+    始まりの時刻が変わったときなど）も見本として入れる。付けた名前が使われなくなるのを防ぐため。"""
     out = []
+    seen = set()
     for m in ms if ms is not None else store.matches():
         icons = load_strip(store, m)
         if not icons:
             continue
+        seen.add(os.path.splitext(m["_file"])[0])
         for k, ic in enumerate(icons):
             if ic is not None:
                 out.append((key_of(m, k), ic, m, k))
+    if ms is None:
+        labeled = {k.split(":")[0] for k in load_labels(store)}
+        for stem in sorted(labeled - seen):
+            fake = {"weapon_icons": stem + ".png", "_file": stem + ".json"}
+            icons = load_strip(store, fake)
+            for k, ic in enumerate(icons or []):
+                if ic is not None:
+                    out.append((key_of(fake, k), ic, None, k))
     return out
 
 
@@ -331,7 +343,7 @@ class Pool:
 
     def __init__(self, store):
         self.store = store
-        self.items = all_icons(store)
+        self.items = all_icons(store, store.matches())  # 名前付けの画面は今の試合の絵だけ
         self.labels = load_labels(store)
         self.F = np.array([feature(it[1]) for it in self.items]) if self.items else np.zeros((0, 1))
         kl, kp = killcam.load_labels(store)
