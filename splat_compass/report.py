@@ -375,7 +375,8 @@ def section_statink(store, ms, st):
     out += card("取り込んだ stat.ink のデータ",
                 f'<p class="muted">{sm["battles"]:,}試合（{len(sm["files"])}日分、{ESC(sm.get("made_at", ""))} に集計）。'
                 'Xマッチとバンカラマッチのガチルールだけを使い、ブキごとの数字からは試合を上げた本人を除いています。'
-                '上げているのはやり込んでいる人が多いので、腕前は平均より高めです。データ: <a href="https://stat.ink/" target="_blank">stat.ink</a></p>', wide=True)
+                '上げているのはやり込んでいる人が多いので、腕前は平均より高めです。データ: <a href="https://stat.ink/" target="_blank">stat.ink</a>'
+                '（<a href="https://creativecommons.org/licenses/by/4.0/deed.ja" target="_blank">CC BY 4.0</a>。集計して使っています）</p>', wide=True)
     return out
 
 
