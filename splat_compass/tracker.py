@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -68,6 +68,8 @@ class Match:
     start: float
     end: float = None
     rule: str = None
+    stage: str = None   # ステージ名（試合前のルールの表示から）
+    stage_crop: object = None  # ステージの名前の部分の画像（RGB）。名前が分からないときに手で付けられるよう残す
     result: str = None
     result_check: tuple = None  # 勝敗を決めた画面の縮小画像と一致度（読み違いを確かめる用）
     me_slot: str = None  # 自分の枠（スペシャルゲージと復活待ち表示から推定）
@@ -88,7 +90,9 @@ class Match:
 
 
 class Tracker:
-    def __init__(self, fps, on_event=None, on_match_end=None, on_log=None):
+    def __init__(self, fps, on_event=None, on_match_end=None, on_log=None, stage_reader=None):
+        self.stage_reader = stage_reader  # hud.StageReader（無ければステージは読まない）
+        self.stage_best = None  # ルールの表示の間で、ステージの名前が一番くっきり見えたコマ (縁の強さ, 切り出し, 時刻)
         self.on_log = on_log or (lambda text: None)  # 試合の始まり・終わりを決めた理由（あとで確かめる用）
         self.fps = fps
         self.on_event = on_event or (lambda m, e: None)
@@ -288,6 +292,11 @@ class Tracker:
         rule, _ = self.screens.rule(img)
         if rule:
             self.last_rule = (rule, t)
+            crop = stage_crop(img)
+            e = stage_feat(crop)[1]
+            # 表示が出始め・消えかけのコマより、字がくっきりしたコマを使う
+            if self.stage_best is None or t - self.stage_best[2] > 15 or e > self.stage_best[0]:
+                self.stage_best = (e, crop.copy(), t)
         if self.finished is not None:
             res = self._result_seen(img)
             if res:
@@ -312,6 +321,11 @@ class Tracker:
         self.match = Match(start=t)
         if t - self.last_rule[1] < RULE_KEEP:
             self.match.rule = self.last_rule[0]
+            if self.stage_best is not None and t - self.stage_best[2] < RULE_KEEP:
+                self.match.stage_crop = self.stage_best[1]
+                if self.stage_reader is not None:
+                    self.match.stage, score = self.stage_reader.read(self.stage_best[1])
+                    self.on_log(f"ステージ: {self.match.stage or f'分かりませんでした（似ている度合い {score:.2f}）'}")
         self.cur = None
         self.on_n, self.off_since = 0, None
         self.ready_at = [None] * 8

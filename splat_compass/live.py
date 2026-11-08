@@ -15,7 +15,7 @@ import time
 
 import numpy as np
 
-from .hud import DEAD, SLOT_NAMES, SPECIAL
+from .hud import DEAD, SLOT_NAMES, SPECIAL, StageReader
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
 from .tracker import END_TRIM, KIND_LABEL, Tracker
@@ -290,13 +290,14 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             except Exception as e:
                 out_q.put(("log", f"振り返りを出せませんでした: {e}"))
             notices.base = load_base(store)
+            tr.stage_reader = StageReader(store)  # 手で付けたステージの名前を見本に足す
             retrain_bg()
         threading.Thread(target=after, daemon=True).start()
 
     began = time.time()
     def on_log(text):
         out_q.put(("log", f"（{dt.datetime.now():%H:%M:%S}）{text}"))
-    tr = Tracker(FPS, on_event=on_event, on_match_end=on_end, on_log=on_log)
+    tr = Tracker(FPS, on_event=on_event, on_match_end=on_end, on_log=on_log, stage_reader=StageReader(store))
     last_status, last_wp, cur_start = 0, 0, None
     wreader, wsent = WeaponReader(store), None
     kills_seen = 0

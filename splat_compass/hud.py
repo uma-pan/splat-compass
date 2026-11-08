@@ -480,3 +480,82 @@ def read_map_ink(img, hues):
     if a + e < 0.15 * m.sum():
         return None
     return float(a / (a + e))
+
+
+# ---------- ステージ ----------
+# 試合前のルールの表示のとき、右下にステージの名前が白い字（黒い縁取り）で出る。右寄せなので、決まった枠で切り出せる。
+STAGE_BOX = (1350, 985, 550, 60)
+STAGE_REFS = os.path.join(TEMPLATE_DIR, "stage_refs.npz")
+STAGE_OK = 0.80  # これ以上似ていればそのステージとする（同じステージ同士は 0.82 以上、違うステージは 0.77 以下だった）
+STAGES = ["ユノハナ大渓谷", "ゴンズイ地区", "ヤガラ市場", "マテガイ放水路", "ナンプラー遺跡", "ナメロウ金属", "クサヤ温泉",
+          "タラポートショッピングパーク", "ヒラメが丘団地", "マサバ海峡大橋", "キンメダイ美術館", "マヒマヒリゾート＆スパ",
+          "海女美術大学", "チョウザメ造船", "ザトウマーケット", "スメーシーワールド", "コンブトラック", "マンタマリア号",
+          "タカアシ経済特区", "オヒョウ海運", "バイガイ亭", "ネギトロ炭鉱", "カジキ空港", "リュウグウターミナル", "デカライン高架下"]
+
+
+def stage_crop(img):
+    """ステージの名前の部分（RGB）。"""
+    return _crop(img, STAGE_BOX)
+
+
+def stage_feat(crop):
+    """名前の部分の縁の強さ。明るさが変わっても（表示が消えかけていても）比べられるように、字の縁だけを見る。
+    (正規化した特徴, 縁の強さの合計)"""
+    g = cv2.cvtColor(np.ascontiguousarray(crop), cv2.COLOR_RGB2GRAY).astype(np.float32)
+    gx = cv2.Sobel(g, cv2.CV_32F, 1, 0)
+    gy = cv2.Sobel(g, cv2.CV_32F, 0, 1)
+    mag = cv2.GaussianBlur(np.hypot(gx, gy), (5, 5), 0)
+    v = cv2.resize(mag, (138, 15), interpolation=cv2.INTER_AREA).ravel()
+    e = float(np.linalg.norm(v))
+    return v / (e + 1e-6), e
+
+
+class StageReader:
+    """名前の付いた見本と見比べてステージを決める。見本は同梱のものと、自分で名前を付けたもの。"""
+
+    def __init__(self, store=None):
+        F, N = [], []
+        try:
+            d = np.load(STAGE_REFS, allow_pickle=False)
+            F += list(d["F"].astype(np.float32))
+            N += [str(x) for x in d["names"]]
+        except (OSError, KeyError, ValueError):
+            pass
+        if store is not None:
+            for stem, name in load_stage_labels(store).items():
+                p = os.path.join(store.root, "stages", stem + ".png")
+                im = cv2.imread(p)
+                if im is not None and name:
+                    F.append(stage_feat(im[..., ::-1])[0])
+                    N.append(name)
+        self.F = np.array(F) if F else None
+        self.N = N
+
+    def read(self, crop):
+        """(ステージ名, 似ている度合い)。分からなければ (None, 度合い)。"""
+        if self.F is None:
+            return None, 0.0
+        v, e = stage_feat(crop)
+        if e < 1.0:
+            return None, 0.0
+        s = self.F @ v
+        j = int(s.argmax())
+        return (self.N[j], float(s[j])) if s[j] >= STAGE_OK else (None, float(s[j]))
+
+
+def load_stage_labels(store):
+    """自分で付けたステージの名前 {試合のファイル名（拡張子なし）: ステージ名}"""
+    import json
+    try:
+        with open(os.path.join(store.root, "stage_labels.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_stage_label(store, stem, name):
+    import json
+    d = load_stage_labels(store)
+    d[stem] = name
+    with open(os.path.join(store.root, "stage_labels.json"), "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=1)

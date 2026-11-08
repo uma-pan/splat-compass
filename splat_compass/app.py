@@ -132,6 +132,7 @@ LIVE_HTML = """
 APP_CSS = """<style>
 .lm-head { margin-bottom:8px; } .lm-head select { font-size:14px; padding:4px; }
 .lm-title { font-size:20px; margin:6px 0 10px; }
+.lm-stage { margin:-4px 0 10px; } .lm-stage img { vertical-align:middle; background:#333; border-radius:4px; }
 .lm-nums { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
 .lm-num { background:#fff; border-radius:10px; padding:8px 14px; min-width:110px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
 .lm-num .v { font-size:28px; font-weight:bold; }
@@ -190,6 +191,10 @@ body.compact .logs { max-height:120px; }
 
 APP_JS = """<script>
 let since = 0, version = null, inMatch = false, lastShown = null;
+async function setStage(file, name) {
+  const r = await fetch("/api/stage", { method: "POST", body: JSON.stringify({ file: file, name: name.trim() }) });
+  if (r.ok) loadLast(file); else alert(await r.text());
+}
 async function loadLast(file) {
   const box = $("lastbody");
   box.innerHTML = '<p class="muted">読み込んでいます…</p>';
@@ -563,6 +568,15 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         self._send(400, err.encode("utf-8"), "text/plain; charset=utf-8")
                     else:
                         self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/stage" and body.get("file"):
+                    from .hud import save_stage_label
+                    f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None
+                    store.update(f, {"stage": name})
+                    if name:
+                        save_stage_label(store, os.path.splitext(f)[0], name)
+                    with st.lock:
+                        st._push(st.logs, f"ステージを直しました: {f} → {name or '（消した）'}")
+                    self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/end":
                     if cmds is None:
                         self._send(400, "映像を読んでいません".encode("utf-8"), "text/plain; charset=utf-8")

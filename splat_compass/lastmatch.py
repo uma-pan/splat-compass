@@ -14,7 +14,7 @@ import json
 import os
 
 from . import coach, feedback, learning, weapons, winprob
-from .hud import SLOT_NAMES
+from .hud import SLOT_NAMES, STAGES
 
 ESC = html.escape
 
@@ -83,9 +83,19 @@ def html_for(store, link, video_dir=None, file=None):
     out = [f'<div class="lm-head"><select onchange="loadLast(this.value)">{opts}</select></div>']
     names = weapons.weapons_of(store, m) if m.get("weapon_icons") else None
     my_weapon = names[SLOT_NAMES.index(me)] if names and me and names[SLOT_NAMES.index(me)] else None
+    stage = m.get("stage")
     out.append(f'<h2 class="lm-title">{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
-               f'<span class="res-{ESC(res)}">{ESC(res)}</span>　<span class="muted">{_mmss(dur)}'
+               f'{ESC(stage or "")}　<span class="res-{ESC(res)}">{ESC(res)}</span>　<span class="muted">{_mmss(dur)}'
                f'{"　" + ESC(my_weapon) if my_weapon else ""}</span></h2>')
+    stem = os.path.splitext(m["_file"])[0]
+    crop = os.path.join(store.root, "stages", stem + ".png")
+    if os.path.exists(crop):  # ステージの名前を付ける・直す
+        dl = "".join(f'<option value="{ESC(n)}">' for n in STAGES)
+        msg = "ステージが分かりませんでした。名前を入れると、次から見本として使います" if not stage else "違っていたら直してください"
+        out.append(f'<div class="lm-stage"><img src="{link(crop)}" height="30"> '
+                   f'<input list="stagenames" value="{ESC(stage or "")}" placeholder="ステージ名" '
+                   f'onchange="setStage({ESC(json.dumps(m["_file"]))}, this.value)"><datalist id="stagenames">{dl}</datalist> '
+                   f'<span class="muted">{msg}</span></div>')
 
     # 数字
     n = feedback._numbers(m)

@@ -27,6 +27,14 @@ class Store:
         while os.path.exists(path):
             n += 1
             path = os.path.join(self.mdir, f"{name}-{n}.json")
+        stem0 = os.path.splitext(os.path.basename(path))[0]
+        if getattr(m, "stage_crop", None) is not None:  # ステージの名前の部分（あとで名前を付け直せるように）
+            import cv2
+            sdir = os.path.join(self.root, "stages")
+            os.makedirs(sdir, exist_ok=True)
+            ok, buf = cv2.imencode(".png", m.stage_crop[..., ::-1])
+            if ok:
+                buf.tofile(os.path.join(sdir, stem0 + ".png"))
         killed_by = []
         if getattr(m, "killcams", None):
             import cv2
@@ -73,6 +81,7 @@ class Store:
             "video_start": round(m.start, 1),
             "video_end": round(m.end, 1) if m.end is not None else None,
             "rule": m.rule,
+            "stage": getattr(m, "stage", None),
             "result": m.result,
             "interrupted": m.interrupted,
             "me_slot": m.me_slot,
@@ -112,6 +121,15 @@ class Store:
         d["result"] = result
         d["interrupted"] = result is None and d.get("interrupted", False)
         d["result_fixed"] = True
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False, indent=1)
+
+    def update(self, fname, fields):
+        """試合の記録の一部の項目を書き換える。"""
+        p = os.path.join(self.mdir, os.path.basename(fname))
+        with open(p, encoding="utf-8") as f:
+            d = json.load(f)
+        d.update(fields)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=1)
 

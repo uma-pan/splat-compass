@@ -165,6 +165,43 @@ def section_overview(ms):
             + "</div>")
 
 
+def section_stages(ms):
+    """ステージごとの勝率と、自分のキル・デスのペース、エリアの打開の成功率。"""
+    st = sorted({m.get("stage") for m in ms if m.get("stage")})
+    if not st:
+        return '<p class="muted">ステージが分かっている試合がまだありません。試合前のルールの表示から読みます。</p>'
+    rows = []
+    for name in st:
+        g = [m for m in ms if m.get("stage") == name and m.get("result") in ("勝ち", "負け")]
+        if not g:
+            continue
+        w = sum(m["result"] == "勝ち" for m in g)
+        by = []
+        for rule in RULES:
+            r = [m for m in g if m.get("rule") == rule]
+            if r:
+                rw = sum(m["result"] == "勝ち" for m in r)
+                by.append(f"{rule.replace('ガチ', '')} {rw}-{len(r) - rw}")
+        nums = [feedback._numbers(m) for m in g]
+        nums = [n for n in nums if n]
+        mins = sum(n["mins"] for n in nums)
+        kn = [n for n in nums if n["kills"] is not None]
+        kpm = sum(len(n["kills"]) for n in kn) / sum(n["mins"] for n in kn) if kn else None
+        dpm = sum(len(n["deaths"]) for n in nums) / mins if mins else None
+        eps = [e for m in g if m.get("rule") == "ガチエリア" and m.get("timeline") for e in area.episodes(m) if e["seconds"] >= 3]
+        dk = pct(sum(e["success"] for e in eps) / len(eps)) if eps else "—"
+        rows.append((len(g), [ESC(name), f"{w}勝{len(g) - w}敗", pct(w / len(g)), ESC("、".join(by)),
+                              num(kpm) if kpm is not None else "—", num(dpm) if dpm is not None else "—", dk]))
+    rows.sort(key=lambda r: -r[0])
+    allm = [m for m in ms if m.get("result") in ("勝ち", "負け")]
+    known = [m for m in allm if m.get("stage")]
+    note = (f'<p class="muted">ステージが分かっている {len(known)}試合（全 {len(allm)}試合のうち）。'
+            '「倒した・倒された」は1分あたりの自分の回数、「打開」はエリアで確保されてから取り返せた割合です。'
+            '試合が少ないステージは、たまたまの差が大きいので参考程度に見てください。</p>')
+    return card("ステージごと", table(["ステージ", "成績", "勝率", "ルール別", "倒した/分", "倒された/分", "打開"],
+                                    [r for _, r in rows]) + note, wide=True)
+
+
 def section_rules(ms, store=None):
     out = []
     rows = []
@@ -565,6 +602,7 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
     tabs += [("overview", "概要", lambda: section_overview(ms)),
             ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, bool(first_tabs))),
             ("rules", "ルール別・打開", lambda: section_rules(ms, store)),
+            ("stages", "ステージ別", lambda: section_stages(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
             ("weapons", "ブキ別の勝率", lambda: section_weapons(store, ms)),
             ("model", "勝率モデル", lambda: section_model(store, ms))]

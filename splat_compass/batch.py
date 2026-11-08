@@ -11,6 +11,7 @@ import os
 import re
 import time
 
+from .hud import StageReader
 from .sources import video_frames
 from .storage import Store
 from .tracker import Tracker
@@ -36,9 +37,9 @@ def process(path, store):
             return  # 短すぎる区間は試合ではない（ロビーや途中で切れた録画）
         p = store.save_match(m, os.path.basename(path), base + dt.timedelta(seconds=m.start))
         saved.append(p)
-        print(f"  試合 {len(saved)}: {m.rule or 'ルール不明'} / {m.result or '勝敗不明'} / 出来事{len(m.events)}件")
+        print(f"  試合 {len(saved)}: {m.rule or 'ルール不明'} / {m.stage or 'ステージ不明'} / {m.result or '勝敗不明'} / 出来事{len(m.events)}件")
 
-    tr = Tracker(FPS, on_match_end=on_end)
+    tr = Tracker(FPS, on_match_end=on_end, stage_reader=StageReader(store))
     for t, img in video_frames(path, FPS):
         tr.feed(t, img)
     tr.flush()
