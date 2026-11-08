@@ -222,7 +222,13 @@ function showState(d) {
       const x = st.slots[st.me];
       me = "自分 " + (x === 0 ? "復活待ち" : x === 2 ? "スペシャルあり" + (st.hold ? `（${Math.floor(st.hold)}秒）` : "") : "生きている");
     }
-    const k = st.kills !== undefined ? `<br>倒した ${st.kills}人` : "";
+    let k = st.kills !== undefined ? `<br>倒した ${st.kills}人` : "";
+    const pc = st.pace;
+    if (pc) {
+      const warn = pc.deaths_usual !== null && pc.deaths >= 3 && pc.deaths >= pc.deaths_usual * 1.5 + 1;
+      const usual = pc.deaths_usual !== null ? `（普段のペースなら ${pc.deaths_usual.toFixed(1)}回）` : "";
+      k = `<br>倒した ${pc.kills}人 ／ 倒された <span style="${warn ? "color:#c0392b;font-weight:bold" : ""}">${pc.deaths}回</span>${usual}`;
+    }
     const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
     $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
   }

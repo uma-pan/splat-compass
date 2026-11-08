@@ -33,15 +33,30 @@ class Notices:
         self.active = set()
         self.specials = [None] * 8  # 8人のスペシャルの名前（ブキが読めたら入る）
         self.once = []  # 出来事から出す、1回きりの通知
+        self.base = None  # 普段の自分の1分あたりの回数（feedback.baseline）
+        self.pace_warned = 0
 
     def set_weapons(self, names):
         from .weapon_info import Info
         info = Info()
         self.specials = [info.get(n)["スペシャル"] if n else None for n in names]
 
+    PACE_FROM = 90.0  # 試合が始まってこの秒数までは、デスのペースを知らせない
+
     def reset(self):
         self.specials = [None] * 8
         self.once = []
+        self.pace_warned = 0  # 何回目のデスで知らせたか
+
+    def pace(self, tr, t):
+        """自分のデスのペースが普段より速ければ知らせる。最初は3回目以降、そのあとは2回増えるごと。"""
+        p = my_pace(tr, t, self.base)
+        if p is None or t - tr.match.start < self.PACE_FROM:
+            return
+        deaths, exp = p["deaths"], p["deaths_usual"]
+        if deaths >= 3 and deaths >= exp * 1.5 + 1 and deaths >= self.pace_warned + 2:
+            self.pace_warned = deaths
+            self.once.append(f"デスが多め {deaths}回（普段なら {exp:.1f}回くらい）")
 
     def event(self, m, e):
         """出来事から知らせたいもの。味方がスペシャルを溜めたまま倒されたら、その種類を出す。"""
@@ -52,6 +67,8 @@ class Notices:
 
     def check(self, tr, t):
         """新しく出た通知の一覧を返す。"""
+        if tr.match is not None:
+            self.pace(tr, t)
         c = tr.counts()
         now = set()
         new_once, self.once = self.once, []
@@ -66,6 +83,32 @@ class Notices:
         new = now - self.active
         self.active = now
         return sorted(new) + new_once
+
+
+def my_pace(tr, t, base):
+    """この試合の自分のキル・デスと、普段のペースならここまでに何回か。自分の枠が分からなければ None。"""
+    m = tr.match
+    if m is None or not m.me_slot:
+        return None
+    deaths = sum(1 for e in m.events if e.slot == m.me_slot and e.kind in ("dead", "dead_with_special"))
+    mins = max(t - m.start, 1.0) / 60
+    d = {"kills": len(m.kills), "deaths": deaths, "deaths_usual": None, "kills_usual": None}
+    if base:
+        d["deaths_usual"] = base["deaths"] * mins
+        if base.get("kills") is not None:
+            d["kills_usual"] = base["kills"] * mins
+    return d
+
+
+def load_base(store):
+    """普段の自分の1分あたりの回数。試合が少なければ None。"""
+    try:
+        from . import feedback
+        ms = sorted([m for m in store.matches() if m.get("video_end") and not m.get("interrupted")],
+                    key=lambda m: m.get("played_at", ""))
+        return feedback.baseline(ms)
+    except Exception:
+        return None
 
 
 def win_prob(tr, t, models):
@@ -111,7 +154,7 @@ def status_text(tr, t):
             f"自分 {me}{hold}")
 
 
-def status_dict(tr, t):
+def status_dict(tr, t, base=None):
     """画面（アプリ）向けの今の状態。"""
     if not tr.in_match:
         return {"in_match": False, "pending": tr.finished is not None}
@@ -120,7 +163,8 @@ def status_dict(tr, t):
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
          "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills),
-         "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None}
+         "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None,
+         "pace": my_pace(tr, t, base)}
     return d
 
 
@@ -168,6 +212,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
     """cmds: 画面からの指示（('end', 勝敗) で試合を手で終える）が入るキュー。"""
     """映像を読み続け、表示したいものを out_q に流す。"""
     notices = Notices()
+    notices.base = load_base(store)
     model = {"m": winprob.load_model(store)}
     models = {"area": model["m"], "simple": winprob.load_simple(store)}
 
@@ -211,6 +256,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
                 out_q.put(("log", f"  [{kind}] {text}"))
         except Exception as e:
             out_q.put(("log", f"振り返りを出せませんでした: {e}"))
+        notices.base = load_base(store)
         retrain_bg()
 
     began = time.time()
@@ -249,7 +295,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
                 notices.reset()
         if time.time() - last_status > 0.3:
             out_q.put(("status", status_text(tr, t)))
-            out_q.put(("state", status_dict(tr, t)))
+            out_q.put(("state", status_dict(tr, t, notices.base)))
             last_status = time.time()
         if start is not None and len(tr.match.kills) > kills_seen:
             rel = tr.match.kills[-1] - start
