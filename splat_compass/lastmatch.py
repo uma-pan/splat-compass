@@ -13,8 +13,8 @@ import html
 import json
 import os
 
-from . import clips, clock, coach, feedback, learning, weapons, winprob
-from .hud import SLOT_NAMES, STAGES
+from . import clips, clock, coach, feedback, learning, turf, weapons, winprob
+from .hud import RULE_NAMES, SLOT_NAMES, STAGES
 from .storage import MODES, mode_of
 
 ESC = html.escape
@@ -124,6 +124,24 @@ def exported_clips(store, m, link):
     return "".join(items) or '<p class="muted">書き出した動画はここに表示されます。</p>'
 
 
+def turf_summary(m, data):
+    if data is None:
+        return '<div class="card wide"><h3>ラスト30秒</h3><p class="muted">試合の終了時刻を確認できる記録が必要です。</p></div>'
+    rows = []
+    for i, side in enumerate(("味方", "相手")):
+        rows.append(f'<tr><td>{side}</td><td>{data["alive"][i]}人</td><td>{data["ready"][i]}人</td>'
+                    f'<td>{data["deaths"][i]}回</td><td>{data["specials"][i]}回</td></tr>')
+    own = data["own"]
+    if own is not None:
+        rows.append(f'<tr><td>自分</td><td>—</td><td>—</td><td>{own[0]}回</td><td>{own[1]}回</td></tr>')
+    ink = data["ink"]
+    note = (f'<p class="muted">終盤に最後に開いたマップ（残り{clock.fmt(m, ink[1])}）では、読み取れた両チームの塗りのうち味方 {ink[2]:.0%}。</p>'
+            if ink else '')
+    return ('<div class="card wide"><h3>ラスト30秒</h3><table><tr><th>チーム</th><th>残り30秒の生存</th>'
+            '<th>残り30秒のSP準備</th><th>終盤のデス</th><th>終盤のSP発動</th></tr>'
+            + "".join(rows) + "</table>" + note + "</div>")
+
+
 def html_for(store, link, video_dir=None, file=None):
     ms = saved_matches(store)
     if not ms:
@@ -132,7 +150,9 @@ def html_for(store, link, video_dir=None, file=None):
     if m is None:
         return '<p class="muted">選んだ試合が見つかりません。</p>'
     i = ms.index(m)
-    base = feedback.baseline([x for x in ms[:i] if not x.get("interrupted")])
+    base = feedback.baseline_for(m, [x for x in ms[:i] if not x.get("interrupted")])
+    is_turf = m.get("rule") == clock.TURF_RULE
+    turf_data = turf.endgame(m) if is_turf else None
     me = m.get("me_slot")
     dur = m["video_end"] - m["video_start"]
     res = result_of(m)
@@ -152,6 +172,11 @@ def html_for(store, link, video_dir=None, file=None):
     btns = "".join(f'<button class="btn lm-mode{" on" if mode == k else ""}" onclick="setMatchMode({ESC(json.dumps(m["_file"]))}, {ESC(json.dumps(k))})">{k}</button> '
                    for k in MODES)
     out.append(f'<div class="lm-stage">この試合の記録: {btns}</div>')
+    rules = "".join(f'<option value="{ESC(rule)}"{" selected" if m.get("rule") == rule else ""}>{ESC(rule)}</option>'
+                    for rule in RULE_NAMES.values())
+    out.append(f'<form class="lm-stage" onsubmit="setRule({file_arg}, this.elements.rule.value); return false">'
+               f'<label>ルール <select name="rule"><option value="">ルール不明</option>{rules}</select></label> '
+               '<button class="btn" type="submit">訂正を保存</button></form>')
     if not m.get("interrupted"):
         corrected = ' <span class="muted">手で直した勝敗です</span>' if m.get("result_fixed") else ''
         rc = (m.get("result_check") or {}).get("image")
@@ -189,7 +214,8 @@ def html_for(store, link, video_dir=None, file=None):
                   cell("溜めたまま倒された", len(n["held"]), "held", False)]
         out.append('<div class="lm-nums">' + "".join(cells) + "</div>")
         if base:
-            out.append('<p class="muted">「普段」は、この試合より前のガチ・エンジョイ両方の記録を、今回の試合時間に合わせた値です。</p>')
+            group = "ナワバリバトルの記録" if is_turf else "ガチ・エンジョイ両方の記録"
+            out.append(f'<p class="muted">「普段」は、この試合より前の{group}を、今回の試合時間に合わせた値です。</p>')
     else:
         out.append('<p class="muted">この試合は自分の枠が分からなかったので、自分の数字は出せません</p>')
 
@@ -207,7 +233,10 @@ def html_for(store, link, video_dir=None, file=None):
         title, note = "推定勝率の推移", "ガチエリア用モデルによる推定です。"
     else:
         title, note = "推定勝率の推移（参考値）", "ガチエリアで学習した簡易モデルを使っています。"
-    out.append(f'<div class="card wide"><h3>{title}</h3><p class="muted">{note}</p>' + _chart(m, pr, me_events, kills) + "</div>")
+    if is_turf:
+        out.append(turf_summary(m, turf_data))
+    else:
+        out.append(f'<div class="card wide"><h3>{title}</h3><p class="muted">{note}</p>' + _chart(m, pr, me_events, kills) + "</div>")
 
     # 振り返り
     lis = "".join(f'<li class="k-{ESC(k)}"><b>{ESC(k)}</b> {ESC(t)}</li>' for k, t in feedback.match_feedback(m, base, store))
@@ -218,7 +247,13 @@ def html_for(store, link, video_dir=None, file=None):
     loc = clips.locate(m, video_dir)  # 録画（カメラから読んだ試合は、同じ時間の OBS の録画）
     if loc is not None:
         src, off = link(loc[0]), loc[1]
+        replay = ''
+        if turf_data is not None:
+            a, b = (t + off - m["video_start"] for t in turf_data["window"])
+            action = ESC(f'lmPlay({json.dumps(src)}, {max(0, a):.1f}, {b:.1f}, "ラスト30秒")')
+            replay = f'<button class="btn" onclick="{action}">ラスト30秒を再生</button>'
         out.append('<div class="card wide" id="scene-player"><h3>元の録画から場面を再生</h3>'
+                   + replay +
                    '<p id="lvnow" class="muted" role="status">下の場面一覧で「再生」を押すと、ここで流れます。</p>'
                    '<video class="clip-video" id="lv" controls preload="none" hidden></video></div>')
     else:

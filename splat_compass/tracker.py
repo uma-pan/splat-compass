@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from .clock import TURF_RULE
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
                   bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
 
@@ -219,7 +220,7 @@ class Tracker:
             if rule in ("ガチヤグラ", "ガチホコ"):
                 # 固定位置にカウントが無いので、背景を数字と読み違えることがある。
                 self._bubble_counts(t, img)
-            else:
+            elif rule != TURF_RULE:
                 c = read_counts(img)
                 if c is not None:
                     pl, pr = read_penalty(img)
@@ -370,8 +371,7 @@ class Tracker:
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
     def _watch_go(self, t, img):
-        """残り時間が 5:00 から 4:59 に変わった時刻から、残り時間が減り始めた時刻（GO）を決める。
-        始まってすぐの 5:00 の数字の形を覚えておき、形が変わったらそれが 4:59。GO はその1秒前。"""
+        """最初の残り時間（5:00 または 3:00）が変わる1秒前を GO とする。"""
         m = self.match
         if m.go is not None or t - m.start > 15:
             return

@@ -54,7 +54,7 @@ def deaths(m, wp=None):
     """deaths の中身。勝率を使わないときは、同じ試合を何度も調べないよう覚えておく（振り返りで全試合を何度も見るため）。"""
     if wp is not None:
         return _deaths(m, wp)
-    key = (m.get("_file"), len(m.get("events") or []), m.get("video_end"), m.get("me_slot"))
+    key = (m.get("_file"), len(m.get("events") or []), m.get("video_end"), m.get("me_slot"), m.get("rule"))
     if key[0] is None:
         return _deaths(m, None)
     if key not in _CACHE:
@@ -68,7 +68,7 @@ def _deaths(m, wp=None):
     me = m.get("me_slot")
     if not me:
         return None
-    tl = m.get("timeline") or []
+    tl = [] if m.get("rule") == clock.TURF_RULE else m.get("timeline") or []
     kills = sorted(k["t"] for k in m.get("kills") or [])
     eps = area.episodes(m) if m.get("rule") == "ガチエリア" and tl else []
     out, last_respawn = [], None

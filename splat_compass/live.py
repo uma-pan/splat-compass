@@ -170,7 +170,10 @@ def status_dict(tr, t, base=None):
          "counts": m.timeline[-1][1:3] if m.timeline and t - m.timeline[-1][0] <= COUNT_MAX_AGE else None,
          "kills": len(m.kills),
          "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None,
-         "pace": my_pace(tr, t, base)}
+         "pace": my_pace(tr, t, None if m.rule == clock.TURF_RULE else base)}
+    if m.rule == clock.TURF_RULE:
+        go = m.go if m.go is not None else m.start + clock.GO_OFFSET
+        d["turf_final"] = t - go >= clock.TURF_LENGTH - clock.TURF_FINAL_SECONDS
     return d
 
 

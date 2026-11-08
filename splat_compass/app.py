@@ -371,6 +371,10 @@ async function setStage(file, name) {
   const r = await fetch("/api/stage", { method: "POST", body: JSON.stringify({ file: file, name: name.trim() }) });
   if (r.ok) await refreshMatch(file); else alert(await r.text());
 }
+async function setRule(file, rule) {
+  const r = await fetch("/api/rule", { method: "POST", body: JSON.stringify({ file, rule }) });
+  if (r.ok) await refreshMatch(file); else alert(await r.text());
+}
 async function loadHistory(page = historyPage) {
   const request = ++historyRequest;
   historyPage = page;
@@ -478,11 +482,12 @@ function drawChart(wp) {
 function showState(d) {
   const st = d.state || {};
   inMatch = !!st.in_match;
+  const turf = inMatch && st.turf_final !== undefined;
   const inputAge = st.frame_at == null ? null : d.now - st.frame_at;
   const inputStale = inputAge != null && inputAge > 3;
   $("inputstate").textContent = !d.reading ? "映像入力なし" : inputAge == null ? "映像を待っています" :
     inputStale ? "映像入力が止まっています" : st.pending ? "映像入力中 · 勝敗を確認中" :
-    st.in_match ? (st.counts ? "映像入力中 · 試合を読み取り中" : "映像入力中 · カウント読み取り待ち") : "映像入力中 · 試合を検出中";
+    st.in_match ? (st.counts || turf ? "映像入力中 · 試合を読み取り中" : "映像入力中 · カウント読み取り待ち") : "映像入力中 · 試合を検出中";
   $("savestate").textContent = d.save_status || "";
   $("savedetail").hidden = !d.last_saved || inMatch || !!st.pending;
   const folderPicker = $("choose-recording-folder");
@@ -509,7 +514,7 @@ function showState(d) {
       const usual = pc.deaths_usual !== null ? `（普段のペースなら ${pc.deaths_usual.toFixed(1)}回）` : "";
       k = `<br>倒した ${pc.kills}人 ／ 倒された <span style="${warn ? "color:#c0392b;font-weight:bold" : ""}">${pc.deaths}回</span>${usual}`;
     }
-    const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
+    const ink = st.ink ? `<br>マップで読めた両チームの塗りのうち味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前）` : "";
     const label = document.createElement("span");
     label.textContent = `${st.rule || "ルール不明"}${st.stage ? "　" + st.stage : ""}　${st.clock ? (st.clock.startsWith("延長") ? st.clock : "残り " + st.clock) : mmss(st.elapsed)}`;
     $("matchinfo").replaceChildren(label);
@@ -541,7 +546,11 @@ function showState(d) {
   $("slots").innerHTML = html; $("alive").innerHTML = alive;
   const wpAge = d.wp_at == null ? null : Math.max(0, d.now - d.wp_at);
   const latest = d.wp[d.wp.length - 1];
-  if (inMatch && !inputStale && st.counts && latest && wpAge != null && wpAge <= 3) {
+  if (turf) {
+    $("wp").textContent = st.turf_final && !inputStale ? "ラスト30秒" : "ナワバリバトル";
+    $("wp").style.color = st.turf_final && !inputStale ? "#c0392b" : "";
+    $("wpsub").textContent = !inputStale && st.clock ? "残り " + st.clock : "";
+  } else if (inMatch && !inputStale && st.counts && latest && wpAge != null && wpAge <= 3) {
     const p = latest[1];
     $("wp").textContent = "推定勝率 " + Math.round(p * 100) + "%";
     $("wp").style.color = p >= 0.6 ? "#1a7f37" : p <= 0.4 ? "#c0392b" : "";
@@ -551,7 +560,8 @@ function showState(d) {
     $("wpsub").textContent = latest && wpAge != null ? (inMatch ? "更新待ち · " : "前の試合 · ") +
       "最終更新 " + new Date(d.wp_at * 1000).toLocaleTimeString() : inMatch && !st.counts ? "カウント読み取り待ち" : "";
   }
-  drawChart(d.wp);
+  $("wpchart").style.display = turf ? "none" : "";
+  if (!turf) drawChart(d.wp);
 }
 
 let wsig = "";
@@ -917,6 +927,15 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         else:
                             st._push(st.logs, f"{job['name']}: {message}")
                     self._send(code, message.encode("utf-8"), "text/plain; charset=utf-8")
+                elif u.path == "/api/rule" and body.get("file"):
+                    from .hud import RULE_NAMES
+                    rule = body.get("rule") or None
+                    if rule is not None and rule not in RULE_NAMES.values():
+                        raise ValueError("選んだルールは使えません")
+                    with st.lock:
+                        store.update(os.path.basename(str(body["file"])), {"rule": rule})
+                        st.version += 1
+                    self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
                     f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None

@@ -9,6 +9,8 @@ import os
 import cv2
 import numpy as np
 
+from .clock import TURF_RULE
+
 W, H = 1920, 1080
 SLOT_NAMES = ["左1", "左2", "左3", "左4", "右1", "右2", "右3", "右4"]  # 左が自分のチーム
 SLOT_X = [560, 650, 740, 830, 1085, 1172, 1258, 1345]
@@ -21,7 +23,7 @@ RULE_BOX = (820, 330, 280, 290)        # 画面中央の黒いしぶきに出る
 DEAD, ALIVE, SPECIAL = 0, 1, 2
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
-RULE_NAMES = {"area": "ガチエリア", "yagura": "ガチヤグラ", "hoko": "ガチホコ", "asari": "ガチアサリ"}
+RULE_NAMES = {"area": "ガチエリア", "yagura": "ガチヤグラ", "hoko": "ガチホコ", "asari": "ガチアサリ", "turf": TURF_RULE}
 
 
 def _mx_sat(rgb):

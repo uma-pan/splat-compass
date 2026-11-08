@@ -109,6 +109,12 @@ def baseline(history):
     return rate
 
 
+def baseline_for(m, history):
+    if m.get("rule") == clock.TURF_RULE:
+        history = [x for x in history if x.get("rule") == clock.TURF_RULE]
+    return baseline(history)
+
+
 def match_feedback(m, base, store=None):
     """[(良い/気になる, 文)]"""
     n = _numbers(m)
@@ -187,7 +193,7 @@ def for_latest(store, last=1, all_modes=True):
                 key=lambda m: m.get("played_at", ""))
     out = []
     for i in range(len(ms) - 1, max(len(ms) - 1 - last, -1), -1):
-        base = baseline(ms[:i])  # 普段の自分は、種類（ガチ・エンジョイ）に関係なく全部の試合から
+        base = baseline_for(ms[i], ms[:i])
         out.append((ms[i], match_feedback(ms[i], base, store)))
     return out
 

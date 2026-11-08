@@ -13,11 +13,11 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import analyze, area, clock, coach, feedback, killcam, objective, scenes, weapons, winprob
+from . import analyze, area, clock, coach, feedback, killcam, objective, scenes, turf, weapons, winprob
 from .storage import Store
 
 ESC = html.escape
-RULES = ("ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ")
+RULES = ("ガチエリア", "ガチヤグラ", "ガチホコ", "ガチアサリ", clock.TURF_RULE)
 
 
 # ---------- 小さな部品 ----------
@@ -211,6 +211,20 @@ def section_rules(ms, store=None):
             w = sum(m["result"] == "勝ち" for m in g)
             rows.append([ESC(rule), f"{w}勝{len(g) - w}敗", pct(w / len(g))])
     out.append(card("ルールごとの勝率", table(["ルール", "成績", "勝率"], rows)))
+    turf_matches = [(m.get("result"), data) for m in ms if (data := turf.endgame(m)) is not None]
+    if turf_matches:
+        rows = []
+        for result in ("勝ち", "負け"):
+            games = [data for res, data in turf_matches if res == result]
+            if games:
+                rows.append([result, str(len(games)), num(avg([d["alive"][0] for d in games])),
+                             num(avg([d["ready"][0] for d in games])), num(avg([d["deaths"][0] for d in games])),
+                             num(avg([d["specials"][0] for d in games]))])
+        if rows:
+            out.append(card("ナワバリバトルのラスト30秒",
+                            table(["勝敗", "試合数", "開始時の味方生存", "開始時の味方SP準備",
+                                   "味方デス", "味方SP発動"], rows)
+                            + '<p class="muted">試合あたりの平均。開始時は残り30秒の時点です。</p>', wide=True))
     # エリア
     am = [m for m in ms if m.get("rule") == "ガチエリア" and m.get("timeline")]
     if am:
