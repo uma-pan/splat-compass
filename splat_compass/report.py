@@ -276,7 +276,7 @@ def special_card(store, eps):
     namer, info = weapons.shared_namer(store), Info(store)
 
     def specials_of(m):
-        names = weapons.weapons_of(store, m, namer)
+        names = weapons.weapons_of(store, m)
         return [info.get(n)["スペシャル"] if n else None for n in names] if names else None
     d = area.by_special(eps, specials_of)
     rows = []
@@ -339,7 +339,7 @@ def killer_rate_card(store, ms, labels, protos):
     for m in ms:
         if not m.get("killed_by") or not m.get("weapon_icons"):
             continue
-        names = weapons.weapons_of(store, m, namer)
+        names = weapons.weapons_of(store, m)
         if not names:
             continue
         enemy = [names[k] for k in range(4, 8) if names[k]]  # 右の4人が相手
@@ -399,7 +399,7 @@ def section_statink(store, ms, st):
     for m in ms:
         if m.get("result") not in ("勝ち", "負け") or not m.get("me_slot") or not m.get("rule"):
             continue
-        names = weapons.weapons_of(store, m, namer)
+        names = weapons.weapons_of(store, m)
         if not names or any(x is None for x in names):
             continue
         me = analyze.SLOTS.index(m["me_slot"])
@@ -624,16 +624,15 @@ document.querySelectorAll("nav button").forEach(b => b.addEventListener("click",
   try {{ localStorage.setItem("sc-tab", b.dataset.tab); }} catch (e) {{}}
 }}));
 try {{ const t = localStorage.getItem("sc-tab"); const b = document.querySelector('nav button[data-tab="' + t + '"]'); if (b) b.click(); }} catch (e) {{}}
-const v = document.getElementById("v");
 let stopAt = null;
 function play(src, a, b, label) {{
+  const v = document.getElementById("v");
   if (!v) return;
   if (v.getAttribute("src") !== src) v.setAttribute("src", src);
   const go = () => {{ v.currentTime = a; v.play(); }};
   if (v.readyState >= 1) go(); else v.addEventListener("loadedmetadata", go, {{ once: true }});
   stopAt = b; document.getElementById("now").textContent = label;
 }}
-if (v) v.addEventListener("timeupdate", () => {{ if (stopAt !== null && v.currentTime >= stopAt) {{ v.pause(); stopAt = null; }} }});
 // 表の見出しを押すと、その列で並べ替える（もう一度押すと逆順）。数字・割合・時刻は数として比べる
 function cellKey(td) {{
   const t = (td ? td.textContent : "").trim();
@@ -665,19 +664,44 @@ document.addEventListener("click", e => {{
   }});
   rows.forEach(r => body.appendChild(r));
 }});
-document.querySelectorAll(".filters input").forEach(cb => cb.addEventListener("change", () => {{
+document.addEventListener("timeupdate", e => {{
+  const v = e.target;
+  if (v.id === "v" && stopAt !== null && v.currentTime >= stopAt) {{ v.pause(); stopAt = null; }}
+}}, true);
+document.addEventListener("change", e => {{
+  const cb = e.target;
+  if (!cb.closest || !cb.closest(".filters")) return;
   document.querySelectorAll(".scene[data-kind='" + cb.value + "']").forEach(el => el.style.display = cb.checked ? "" : "none");
-}}));
+}});
+// あとから読み込むタブ（アプリ）: 開いたときに中身を取りに行く
+async function loadTab(t) {{
+  if (!t || t.dataset.lazy !== "1" || t.dataset.loading) return;
+  t.dataset.loading = "1";
+  const started = Date.now();
+  const tick = setInterval(() => {{ const p = t.querySelector(".loading"); if (p) p.textContent = "集計しています… " + Math.round((Date.now() - started) / 1000) + "秒"; }}, 1000);
+  try {{
+    const r = await fetch("/api/tab?k=" + encodeURIComponent(t.id));
+    t.innerHTML = await r.text();
+    t.dataset.lazy = "";
+  }} catch (e) {{ t.innerHTML = '<p class="muted">読み込めませんでした</p>'; }}
+  clearInterval(tick); delete t.dataset.loading;
+}}
+document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => loadTab(document.getElementById(b.dataset.tab))));
+loadTab(document.querySelector(".tab.on"));
 </script>{script}</body></html>"""
 
 
-def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="", script=""):
-    """まとめのページの HTML。first_tabs: 先頭に足すタブ [(キー, 名前, HTML)]（アプリの「試合中」など）。"""
+def _matches(store):
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
     ms.sort(key=lambda m: m.get("played_at", ""))
-    tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
-    tabs += [("overview", "概要", lambda: section_overview(ms)),
-            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, bool(first_tabs))),
+    return ms
+
+
+def tab_list(store, video_dir=None, link=scenes.file_link, app=False):
+    """集計のタブ [(キー, 名前, 中身を作る関数)]。"""
+    ms = _matches(store)
+    tabs = [("overview", "概要", lambda: section_overview(ms)),
+            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, app)),
             ("rules", "ルール別・打開", lambda: section_rules(ms, store)),
             ("stages", "ステージ別", lambda: section_stages(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
@@ -691,9 +715,34 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
                     f'<div class="filters">{scenes.filters_html(kinds)}</div>'
                     f'<p class="muted">新しい60試合から {total}場面</p>' + "".join(secs))
         tabs.append(("scenes", "見返す場面", sc))
+    return tabs
+
+
+def tab_body(store, key, video_dir=None, link=scenes.file_link, app=False):
+    """1つのタブの中身（アプリでは、タブを開いたときにこれだけ作る）。"""
+    for k, t, fn in tab_list(store, video_dir, link, app):
+        if k == key:
+            try:
+                return fn()
+            except Exception as e:  # 1つの集計が失敗しても、ほかは見られるようにする
+                return f'<p class="muted">この集計を作れませんでした: {ESC(str(e))}</p>'
+    return '<p class="muted">このタブはありません</p>'
+
+
+def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="", script="", lazy=False):
+    """まとめのページの HTML。first_tabs: 先頭に足すタブ [(キー, 名前, HTML)]（アプリの「試合中」など）。
+    lazy=True なら集計のタブの中身は作らず、開いたときに読み込む（アプリ用。ページがすぐ出る）。"""
+    ms = _matches(store)
+    tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
+    tabs += tab_list(store, video_dir, link, bool(first_tabs))
     nav = "".join(f'<button data-tab="{k}" class="{"on" if i == 0 else ""}">{ESC(t)}</button>' for i, (k, t, _) in enumerate(tabs))
     bodies = ""
+    n_first = len(first_tabs)
     for i, (k, t, fn) in enumerate(tabs):
+        if lazy and i >= n_first:
+            bodies += (f'<div class="tab{" on" if i == 0 else ""}" id="{k}" data-lazy="1">'
+                       '<p class="muted loading">集計しています…（試合が多いと数秒かかります）</p></div>')
+            continue
         try:
             body = fn()
         except Exception as e:  # 1つの集計が失敗しても、ほかは見られるようにする

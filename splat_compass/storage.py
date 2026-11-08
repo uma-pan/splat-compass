@@ -122,13 +122,29 @@ class Store:
         （勝率モデルやブキの見本は、どの試合でも同じように使えるので全部使う）。"""
         view = None if all else self.view()
         out = []
+        cache = self.__dict__.setdefault("_cache", {})
+        seen = set()
         for p in sorted(glob.glob(os.path.join(self.mdir, "*.json"))):
-            with open(p, encoding="utf-8") as f:
-                d = json.load(f)
-            d["_file"] = os.path.basename(p)
+            # 読んだことがあり、変わっていないファイルは読み直さない（まとめでは何度も一覧を取るので速くなる）
+            try:
+                st = os.stat(p)
+            except OSError:
+                continue
+            key = (st.st_mtime_ns, st.st_size)
+            seen.add(p)
+            hit = cache.get(p)
+            if hit is None or hit[0] != key:
+                with open(p, encoding="utf-8") as f:
+                    d = json.load(f)
+                d["_file"] = os.path.basename(p)
+                cache[p] = hit = (key, d)
+            d = dict(hit[1])  # 呼び出し側が項目を書き換えても、覚えている分は変わらないように
             if view and mode_of(d) != view:
                 continue
             out.append(d)
+        for p in list(cache):
+            if p not in seen:
+                del cache[p]
         return out
 
     def view(self):

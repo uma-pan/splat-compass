@@ -213,7 +213,10 @@ async function makeClips(file, kind) {
 async function setConfig(c) {
   const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
   if (!r.ok) { alert(await r.text()); return; }
-  if (c.view !== undefined) location.reload();  // 見る記録を変えたら、まとめを作り直す
+  if (c.view !== undefined) {  // 見る記録を変えたら、まとめを作り直す
+    document.querySelectorAll(".tab").forEach(t => { if (t.id !== "live") t.innerHTML = '<p class="muted">見る記録を切り替えています…</p>'; });
+    location.reload();
+  }
 }
 async function setMatchMode(file, mode) {
   const r = await fetch("/api/match_mode", { method: "POST", body: JSON.stringify({ file: file, mode: mode }) });
@@ -541,9 +544,29 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                                           first_tabs=[("live", "試合中", LIVE_HTML),
                                                       ("last", "直前の試合", '<div id="lastbody"><p class="muted">読み込んでいます…</p></div>'),
                                                       ("wcheck", "ブキの確認", '<div id="wcheckbody"><p class="muted">読み込んでいます…</p></div>')],
-                                          head=APP_CSS, script=APP_JS)
+                                          head=APP_CSS, script=APP_JS, lazy=True)
             cache["version"] = v
+            cache["tabs"] = {}
         return cache["html"]
+
+    def warm():
+        """起動したら、試合が始まる前に集計のタブを先に作っておく（初めて開いたときに待たされないように）。"""
+        time.sleep(3)
+        for k, _, _ in report.tab_list(store, get_video_dir(), link, True):
+            if st.state.get("in_match"):
+                return  # 試合中は読み取りを優先する
+            try:
+                tab(k)
+            except Exception:
+                pass
+    threading.Thread(target=warm, daemon=True).start()
+
+    def tab(key):
+        """集計のタブの中身。同じ版の間は作ったものを使い回す。"""
+        page()  # 版が変わっていれば作り直しの合図を受ける
+        if key not in cache.setdefault("tabs", {}):
+            cache["tabs"][key] = report.tab_body(store, key, get_video_dir(), link, app=True)
+        return cache["tabs"][key]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -575,6 +598,9 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         out.append({"index": i, "w": w, "h": h,
                                     "img": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""})
                     self._send(200, json.dumps(out).encode("utf-8"), "application/json")
+                elif u.path == "/api/tab":
+                    k = urllib.parse.parse_qs(u.query).get("k", [""])[0]
+                    self._send(200, tab(k).encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/wcheck":
                     try:
                         body = review_html(store, link)

@@ -47,14 +47,22 @@ def save_strip(store, stem, icons):
     return fname
 
 
+_STRIPS = {}
+
+
 def load_strip(store, m):
     """試合の8枚（RGB、無いところは None）。記録が無ければ None。"""
     fname = m.get("weapon_icons")
     if not fname:
         return None
     p = os.path.join(_dir(store), fname)
-    if not os.path.exists(p):
+    try:
+        mt = os.path.getmtime(p)
+    except OSError:
         return None
+    hit = _STRIPS.get(p)
+    if hit is not None and hit[0] == mt:  # 読んだことがあり変わっていなければ使い回す
+        return list(hit[1])
     im = cv2.imdecode(np.fromfile(p, np.uint8), cv2.IMREAD_COLOR)
     if im is None or im.shape[1] < 8 * W:
         return None
@@ -63,7 +71,8 @@ def load_strip(store, m):
     for k in range(8):
         t = im[:, k * W:(k + 1) * W]
         out.append(t.copy() if t.max() > 0 else None)
-    return out
+    _STRIPS[p] = (mt, out)
+    return list(out)
 
 
 def _edges(icon):
@@ -234,15 +243,26 @@ def shared_namer(store):
     key = (store.root, labels_mtime(store), len(os.listdir(d)) if os.path.isdir(d) else 0)
     if _SHARED.get("key") != key:
         _SHARED["namer"], _SHARED["key"] = Namer(store), key
+        _NAMES.clear()
     return _SHARED["namer"]
 
 
+_NAMES = {}
+
+
 def weapons_of(store, m, namer=None):
-    """試合の8人のブキの名前（分からない枠は None）。"""
+    """試合の8人のブキの名前（分からない枠は None）。同じ見本の間は、結果を覚えておいて使い回す。"""
+    if namer is None:
+        namer = shared_namer(store)
+        key = (m.get("_file"), m.get("weapon_icons"), _SHARED.get("key"))
+        if key in _NAMES:
+            return list(_NAMES[key]) if _NAMES[key] is not None else None
+        r = weapons_of(store, m, namer)
+        _NAMES[key] = r
+        return list(r) if r is not None else None
     icons = load_strip(store, m)
     if not icons:
         return None
-    namer = namer or shared_namer(store)
     return [namer.name(key_of(m, k), ic) if ic is not None else None for k, ic in enumerate(icons)]
 
 
@@ -630,14 +650,14 @@ def label_gui(store):
 # ---------- 集計 ----------
 def stats(store, ms):
     """{'me'/'ally'/'enemy': {名前: [試合数, 勝ち数]}}, 名前の分かった割合"""
-    namer = Namer(store)
+    namer = shared_namer(store)
     out = {"me": defaultdict(lambda: [0, 0]), "ally": defaultdict(lambda: [0, 0]),
            "enemy": defaultdict(lambda: [0, 0])}
     seen = named = 0
     for m in ms:
         if m.get("result") not in ("勝ち", "負け"):
             continue
-        names = weapons_of(store, m, namer)
+        names = weapons_of(store, m)
         if not names:
             continue
         win = m["result"] == "勝ち"
@@ -662,12 +682,12 @@ def compositions(store, ms):
     """試合ごとの編成。[(勝ったか, 味方4人の情報, 相手4人の情報)]（勝敗と自分の枠が分かる試合だけ）"""
     from .weapon_info import Info
     info = Info(store)
-    namer = Namer(store)
+    namer = shared_namer(store)
     out = []
     for m in ms:
         if m.get("result") not in ("勝ち", "負け") or not m.get("me_slot"):
             continue
-        names = weapons_of(store, m, namer)
+        names = weapons_of(store, m)
         if not names:
             continue
         me = SLOT_NAMES.index(m["me_slot"])
