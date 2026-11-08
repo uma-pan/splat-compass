@@ -21,6 +21,8 @@ from .storage import Store
 from .tracker import END_TRIM, KIND_LABEL, Tracker
 from . import clock, learning, winprob
 
+COUNT_MAX_AGE = 2.5
+
 FPS = 10  # 1秒に読むコマ数（溜まってすぐ使うスペシャルを見落とさないよう、多めに読む）
 
 
@@ -120,7 +122,7 @@ def win_prob(tr, t, models):
     if m is None or not m.timeline or tr.cur is None:
         return None, None
     last = m.timeline[-1]
-    if t - last[0] > 2.5:
+    if t - last[0] > COUNT_MAX_AGE:
         return None, None
     evs = [e.row() for e in m.events]
     ctx = winprob.context(m.timeline, evs, t)
@@ -165,7 +167,8 @@ def status_dict(tr, t, base=None):
          "stage": m.stage,
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
-         "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills),
+         "counts": m.timeline[-1][1:3] if m.timeline and t - m.timeline[-1][0] <= COUNT_MAX_AGE else None,
+         "kills": len(m.kills),
          "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None,
          "pace": my_pace(tr, t, base)}
     return d
@@ -272,9 +275,15 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             out_q.put(("wp_trim", m.end - m.start - getattr(m, "trim", END_TRIM)))
         if not getattr(m, "by_hand", False) and (m.end is None or m.end - m.start < MIN_MATCH or len(m.events) < MIN_EVENTS):
             out_q.put(("log", f"短すぎる（{int((m.end or m.start) - m.start)}秒）ので試合として保存しませんでした"))
+            out_q.put(("save_status", "試合時間または記録が不足したため保存しませんでした"))
             return
         when = dt.datetime.now() - dt.timedelta(seconds=(time.time() - began) - m.start) if source == "camera" else None
-        p = store.save_match(m, source, when)
+        try:
+            p = store.save_match(m, source, when)
+        except (OSError, ValueError) as e:
+            out_q.put(("save_status", "試合を保存できませんでした"))
+            out_q.put(("log", f"試合を保存できませんでした: {e}"))
+            return
         out_q.put(("weapons_saved", os.path.splitext(os.path.basename(p))[0]))
         res = m.result or "勝敗不明（中断扱い）"
         out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {res} → 保存しました"))
@@ -283,7 +292,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
         def after():  # 振り返りは少し重いので、読み取りを止めないよう別のスレッドで出す
             if m.rule == "ガチエリア" and model["m"] is not None:
                 for rel, what, d in learning.swings(model["m"], store.load(p)):
-                    out_q.put(("log", f"  勝率が大きく動いた場面: {clock.fmt(m, rel)} {what}（{d * 100:+.0f}%）"))
+                    out_q.put(("log", f"  推定勝率が大きく動いた場面: {clock.fmt(m, rel)} {what}（{d * 100:+.0f}pt）"))
             try:
                 from . import feedback
                 lines = feedback.for_latest(store, 1)[0][1]
@@ -342,7 +351,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
                 notices.reset()
         if time.time() - last_status > 0.3:
             out_q.put(("status", status_text(tr, t)))
-            out_q.put(("state", status_dict(tr, t, notices.base)))
+            out_q.put(("state", {**status_dict(tr, t, notices.base), "frame_at": got}))
             last_status = time.time()
         if start is not None and len(tr.match.kills) > kills_seen:
             rel = tr.match.kills[-1] - start

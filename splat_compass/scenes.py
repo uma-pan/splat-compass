@@ -38,7 +38,7 @@ def find_scenes(m, model=None):
     if model is not None and m.get("rule") == "ガチエリア" and m.get("timeline"):
         for rel, what, d in learning.swings(model, m, top=3):
             t = s0 + rel
-            out.append((t - 10, t + 6, "勝率が大きく動いた", f"{what}（勝率 {d * 100:+.0f}%）"))
+            out.append((t - 10, t + 6, "勝率が大きく動いた", f"{what}（推定勝率 {d * 100:+.0f}pt）"))
     if m.get("rule") == "ガチエリア":
         for e in area_episodes(m):
             if not e["success"] or e["seconds"] >= LONG_DAKAI:
@@ -115,18 +115,27 @@ def file_link(path):
 def scene_sections(store, video_dir, last=None, link=file_link):
     """場面の一覧の部品: (試合ごとの HTML の並び, 種類の並び, 場面の数)。
     link: ファイルの場所から、ページに書く URL を作る関数（アプリの画面では http の URL にする）。"""
+    from . import clips
+
     model = winprob.load_model(store)
     ms = [m for m in store.matches() if m.get("video_end") and not m.get("interrupted")]
-    ms = [m for m in ms if os.path.exists(os.path.join(video_dir, m["source"]))]
     ms.sort(key=lambda m: m.get("played_at", ""), reverse=True)
-    if last:
-        ms = ms[:last]
+    recordings, durations = clips.recording_times(video_dir), {}
     kinds, sections, total = [], [], 0
+    matched = 0
     for m in ms:
+        if last and matched >= last:
+            break
+        recording = clips.locate(m, video_dir, recordings, durations)
+        if recording is None:
+            continue
+        matched += 1
         sc = find_scenes(m, model)
         if not sc:
             continue
-        src = link(os.path.join(video_dir, m["source"]))
+        path, offset = recording
+        src = link(path)
+        shift = offset - m["video_start"]
         rows = []
         for a, b, kind, desc in sc:
             if kind not in kinds:
@@ -134,7 +143,7 @@ def scene_sections(store, video_dir, last=None, link=file_link):
             label = f"{m.get('played_at', '')[:16].replace('T', ' ')} {m.get('rule') or ''} {clock.fmt(m, a - m['video_start'])} {desc}"
             rows.append(
                 f'<div class="scene" data-kind="{html.escape(kind)}">'
-                f'<button onclick="{html.escape(f"play({json.dumps(src)}, {a:.1f}, {b:.1f}, {json.dumps(label, ensure_ascii=False)})", quote=True)}">再生</button>'
+                f'<button onclick="{html.escape(f"play({json.dumps(src)}, {max(0, a + shift):.1f}, {b + shift:.1f}, {json.dumps(label, ensure_ascii=False)})", quote=True)}">再生</button>'
                 f'<span class="time">{clock.fmt(m, a - m["video_start"])}</span>'
                 f'<span class="kind">{html.escape(kind)}</span><span>{html.escape(desc)}</span></div>')
         shots = m.get("map_shots") or []

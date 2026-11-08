@@ -37,8 +37,10 @@ class State:
         self.lock = threading.Lock()
         self.state = {"in_match": False}
         self.wp, self.wp_kind = [], None
+        self.wp_at = None
         self.weapons, self.weapons_file = None, None  # この試合の8人のブキ、保存された試合の名前
         self.last_saved = None  # 最後に保存した試合（次の試合が始まっても残す）
+        self.save_status = ""
         self.notices = deque(maxlen=20)
         self.logs = deque(maxlen=300)
         self.seq = 0
@@ -72,16 +74,23 @@ class State:
                     rel, p, k = msg
                     self.wp.append((round(rel, 1), round(p, 4)))
                     self.wp_kind = k
+                    self.wp_at = time.time()
                 elif kind == "wp_trim":
                     self.wp = [x for x in self.wp if x[0] <= msg]
                 elif kind == "wp_reset":
                     self.wp, self.wp_kind = [], None
+                    self.wp_at, self.save_status = None, ""
                     self.weapons, self.weapons_file = None, None
                 elif kind == "weapons":
                     self.weapons = msg
                 elif kind == "weapons_saved":
                     self.weapons_file = msg
-                    self.last_saved = msg
+                elif kind == "saved":
+                    self.last_saved = os.path.splitext(os.path.basename(msg))[0]
+                    self.save_status = "試合を保存しました"
+                    self.version += 1
+                elif kind == "save_status":
+                    self.save_status = msg
                 elif kind == "notice":
                     self._push(self.notices, msg)
                 elif kind == "log":
@@ -91,10 +100,12 @@ class State:
                     self.version += 1
                 elif kind == "end":
                     self.reading = False
+                    self.state = {"in_match": False}
 
     def snapshot(self, since):
         with self.lock:
-            return {"state": self.state, "wp": self.wp, "wp_kind": self.wp_kind, "reading": self.reading,
+            return {"state": self.state, "wp": self.wp.copy(), "wp_kind": self.wp_kind, "reading": self.reading,
+                    "wp_at": self.wp_at, "now": time.time(), "save_status": self.save_status,
                     "can_start": self.can_start, "mode": self.mode, "view": self.view,
                     "weapons": self.weapons, "weapons_file": self.weapons_file, "last_saved": self.last_saved,
                     "version": self.version, "seq": self.seq,
@@ -104,17 +115,18 @@ class State:
 
 # ---------- 画面の HTML ----------
 LIVE_HTML = """
+<div class="input-state" role="status"><strong id="inputstate">映像の状態を確認中</strong>
+  <span id="savestate"></span> <button id="savedetail" class="btn" onclick="openHistory()" hidden>直前の試合を開く</button></div>
 <div class="lv-top">
   <div><div id="wp" class="wpbig">勝率 —</div><div id="wpsub" class="muted"></div></div>
   <button id="compact" class="btn">小さくする</button>
 </div>
 <div id="notice" class="notice"></div>
-<div class="modebar">この試合の記録: <button class="btn mode" data-mode="ガチ" onclick="setConfig({mode:'ガチ'})">ガチ</button>
+<div class="modebar">保存時の分類: <button class="btn mode" data-mode="ガチ" onclick="setConfig({mode:'ガチ'})">ガチ</button>
   <button class="btn mode" data-mode="エンジョイ" onclick="setConfig({mode:'エンジョイ'})">エンジョイ</button>
   <span class="muted">（本気でやる記録と、そうでない記録を分けて集計します）</span></div>
 <button id="recam" class="btn" style="float:right" onclick="recam()">カメラを選び直す</button>
 <label class="muted" style="display:block;margin-bottom:8px"><input type="checkbox" id="sound" onchange="try{localStorage.setItem('sc-sound', this.checked ? '1' : '0')}catch(e){}"> 通知で音を鳴らす</label>
-<div id="reloadbar" class="reloadbar">まとめが新しくなりました <button class="btn" onclick="location.reload()">読み直す</button></div>
 <div id="campick" class="card campick"><h3>読み取るカメラ</h3>
   <p class="muted">キャプチャーボードや OBS の仮想カメラを選んでください。スプラトゥーンの画面が映っているものを選びます。</p>
   <button class="btn" onclick="findCameras()">カメラを探す</button>
@@ -126,17 +138,38 @@ LIVE_HTML = """
       <button class="btn" onclick="endMatch('勝ち')">勝ちで終える</button>
       <button class="btn" onclick="endMatch('負け')">負けで終える</button>
       <button class="btn" onclick="endMatch(null)">勝敗不明で終える</button></div>
-    <div id="lastbox" class="endbox"><span id="lastlabel">直前の試合</span>の勝敗を直す:
-      <button class="btn" onclick="fixLast('勝ち')">勝ち</button>
-      <button class="btn" onclick="fixLast('負け')">負け</button></div></div>
+  </div>
   <div class="card"><h3>8人</h3><div id="slots" class="slots"></div><div id="alive" class="info"></div></div>
 </div>
 <div class="card lv-log"><h3>記録</h3><ul id="logs" class="logs"></ul></div>
 <div class="card lv-weapons"><h3>8人のブキ</h3><div id="weapons" class="muted">試合が始まると読み取ります</div></div>
 """
 
+HISTORY_HTML = """
+<h2>試合履歴</h2>
+<p class="muted">ガチ・エンジョイ両方の記録を探せます。上部の「集計の対象」は集計タブに適用されます。</p>
+<form id="historyfilters" class="card history-filters" onsubmit="loadHistory(0); return false">
+  <label>開始日 <input type="date" name="from"></label><label>終了日 <input type="date" name="to"></label>
+  <label>ルール <input type="search" name="rule" placeholder="例：ガチエリア"></label>
+  <label>ステージ <input type="search" name="stage" placeholder="例：ユノハナ"></label>
+  <label>勝敗 <select name="result"><option value="">すべて</option><option>勝ち</option><option>負け</option><option>勝敗不明</option><option>中断</option></select></label>
+  <label>分類 <select name="mode"><option value="">すべて</option><option>ガチ</option><option>エンジョイ</option></select></label>
+  <button class="btn" type="submit">絞り込む</button>
+  <button class="btn" type="button" onclick="this.form.reset(); loadHistory(0)">クリア</button>
+</form>
+<div id="historylist"></div>
+<div id="lastbody" tabindex="-1"></div>
+"""
+
 APP_CSS = """<style>
-.lm-head { margin-bottom:8px; } .lm-head select { font-size:14px; padding:4px; }
+.history-filters { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.history-filters label { display:inline-flex; align-items:center; gap:4px; }
+.history-filters input[type=search] { width:125px; }
+#historylist, #lastbody { margin-top:12px; }
+.input-state { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:10px; font-size:13px; }
+.input-state strong { background:#e5edf9; border-radius:5px; padding:4px 8px; }
+.recording-settings { margin-bottom:12px; }
+.recording-settings input { width:min(65%, 460px); margin:4px; }
 .lm-title { font-size:20px; margin:6px 0 10px; }
 .lm-stage { margin:-4px 0 10px; } .lm-stage img { vertical-align:middle; background:#333; border-radius:4px; }
 .lm-nums { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
@@ -151,7 +184,7 @@ nav { overflow-x:auto; } nav button { white-space:nowrap; flex:0 0 auto; }
 header { flex-wrap:wrap; } .viewsel { white-space:nowrap; }
 .modebar { margin-bottom:10px; } .btn.lm-mode.on, .btn.mode.on { background:#1f6feb; color:#fff; border-color:#1f6feb; }
 .viewsel { position:absolute; right:16px; top:14px; font-size:13px; color:#fff; } .viewsel select { font-size:13px; }
-.reloadbar { display:none; margin-bottom:10px; color:#555; } .reloadbar.on { display:block; }
+.reloadbar { display:none; padding:6px 16px; color:#555; } .reloadbar.on { display:block; }
 .campick { display:none; margin-bottom:12px; } .campick.on { display:block; }
 .camlist { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
 .camlist button { border:1px solid #d0d7de; background:#fff; border-radius:8px; padding:6px; cursor:pointer; font-family:inherit; }
@@ -200,7 +233,8 @@ body.compact .logs { max-height:120px; }
 </style>"""
 
 APP_JS = """<script>
-let since = 0, version = null, inMatch = false, lastShown = null;
+let since = 0, version = window.summaryVersion, inMatch = false;
+let historyPage = 0, historyRequest = 0, detailRequest = 0, activeFile = null, lastSaved = null;
 async function recam() {
   if (inMatch && !confirm("試合の途中です。読むのをやめると、この試合は途中までで保存されます。よいですか？")) return;
   await fetch("/api/stop_camera", { method: "POST", body: "{}" });
@@ -213,33 +247,87 @@ async function makeClips(file, kind) {
 async function setConfig(c) {
   const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
   if (!r.ok) { alert(await r.text()); return; }
-  if (c.view !== undefined) {  // 見る記録を変えたら、まとめを作り直す
-    document.querySelectorAll(".tab").forEach(t => { if (t.id !== "live") t.innerHTML = '<p class="muted">見る記録を切り替えています…</p>'; });
-    location.reload();
-  }
+  if (c.view !== undefined || c.video_dir !== undefined) await refreshSummary();
+  if (c.video_dir !== undefined && activeFile) await loadLast(activeFile);
+}
+async function refreshSummary() {
+  try {
+    const r = await fetch("/api/summary");
+    if (!r.ok) throw new Error(await r.text());
+    const d = await r.json();
+    if (version !== null && d.version < version) return;
+    version = d.version;
+    $("summary-subtitle").textContent = d.subtitle;
+    $("reloadbar").classList.remove("on");
+    document.querySelectorAll(".tab[data-lazy]").forEach(t => {
+      delete t.loadRequest;
+      t.dataset.lazy = "1";
+      t.innerHTML = '<p class="muted loading">集計しています…</p>';
+    });
+    loadTab(document.querySelector(".tab.on"));
+  } catch (e) { alert("集計を更新できませんでした: " + e.message); }
+}
+async function chooseRecordingFolder() {
+  const input = $("recording-folder");
+  if (!window.pywebview?.api?.choose_folder) { input.focus(); return; }
+  try {
+    const folder = await window.pywebview.api.choose_folder();
+    if (folder) { input.value = folder; await setConfig({video_dir: folder}); }
+  } catch (e) { alert("フォルダを選べませんでした: " + e.message); }
 }
 async function setMatchMode(file, mode) {
   const r = await fetch("/api/match_mode", { method: "POST", body: JSON.stringify({ file: file, mode: mode }) });
-  if (r.ok) loadLast(file); else alert(await r.text());
+  if (r.ok) await refreshMatch(file); else alert(await r.text());
 }
-(function () {  // 見る記録の切り替えを、ページの上に置く
+(function () {  // 集計の対象を、ページの上に置く
   const h = document.querySelector("header");
   if (!h) return;
   h.style.position = "relative";
   const d = document.createElement("div"); d.className = "viewsel";
-  d.innerHTML = '見る記録 <select id="viewsel" onchange="setConfig({view: this.value})">' +
-    '<option value="ガチ">ガチだけ</option><option value="エンジョイ">エンジョイだけ</option><option value="すべて">すべて</option></select>';
+  d.innerHTML = '<label>集計の対象 <select id="viewsel" onchange="setConfig({view: this.value})">' +
+    '<option value="ガチ">ガチだけ</option><option value="エンジョイ">エンジョイだけ</option><option value="すべて">すべて</option></select></label>';
   h.appendChild(d);
+  document.querySelector("nav").insertAdjacentHTML("afterend", '<div id="reloadbar" class="reloadbar">集計に新しい記録があります <button class="btn" onclick="refreshSummary()">集計を更新</button></div>');
 })();
 async function setStage(file, name) {
   const r = await fetch("/api/stage", { method: "POST", body: JSON.stringify({ file: file, name: name.trim() }) });
-  if (r.ok) loadLast(file); else alert(await r.text());
+  if (r.ok) await refreshMatch(file); else alert(await r.text());
 }
-async function loadLast(file) {
+async function loadHistory(page = historyPage) {
+  const request = ++historyRequest;
+  historyPage = page;
+  const params = new URLSearchParams(new FormData($("historyfilters")));
+  params.set("page", page);
+  const box = $("historylist");
+  if (!box.innerHTML) box.textContent = "試合を探しています…";
+  try {
+    const r = await fetch("/api/history?" + params);
+    const body = await r.text();
+    if (!r.ok) throw new Error(body);
+    if (request === historyRequest) box.innerHTML = body;
+  } catch (e) { if (request === historyRequest) box.textContent = "試合を読み込めませんでした: " + e.message; }
+}
+async function loadLast(file, scroll = false) {
+  const request = ++detailRequest;
+  activeFile = file || null;
   const box = $("lastbody");
   box.innerHTML = '<p class="muted">読み込んでいます…</p>';
-  const r = await fetch("/api/last" + (file ? "?file=" + encodeURIComponent(file) : ""));
-  box.innerHTML = await r.text();
+  try {
+    const r = await fetch("/api/last" + (file ? "?file=" + encodeURIComponent(file) : ""));
+    const body = await r.text();
+    if (!r.ok) throw new Error(body);
+    if (request !== detailRequest) return;
+    box.innerHTML = body;
+    activeFile = box.querySelector("[data-match]")?.dataset.match || null;
+    if (scroll) box.focus();
+  } catch (e) { if (request === detailRequest) box.textContent = "試合を開けませんでした: " + e.message; }
+}
+function openHistory(file) {
+  document.querySelector('nav button[data-tab="last"]').click();
+  loadLast(file, true);
+}
+async function refreshMatch(file) {
+  await Promise.all([refreshSummary(), loadHistory(), ...(activeFile === file ? [loadLast(file)] : [])]);
 }
 let lmStop = null;
 function lmPlay(src, a, b, label) {
@@ -252,7 +340,7 @@ function lmPlay(src, a, b, label) {
 }
 document.addEventListener("click", e => {
   const b = e.target.closest && e.target.closest('nav button[data-tab="last"]');
-  if (b && lastShown === null) { lastShown = "first"; loadLast(); }
+  if (b) { loadHistory(); if (activeFile) loadLast(activeFile); }
   if (e.target.closest && e.target.closest('nav button[data-tab="wcheck"]')) loadWcheck();  // 開くたびに新しい試合を読む
 });
 async function loadWcheck() {
@@ -309,8 +397,19 @@ function drawChart(wp) {
 function showState(d) {
   const st = d.state || {};
   inMatch = !!st.in_match;
+  const inputAge = st.frame_at == null ? null : d.now - st.frame_at;
+  const inputStale = inputAge != null && inputAge > 3;
+  $("inputstate").textContent = !d.reading ? "映像入力なし" : inputAge == null ? "映像を待っています" :
+    inputStale ? "映像入力が止まっています" : st.pending ? "映像入力中 · 勝敗を確認中" :
+    st.in_match ? (st.counts ? "映像入力中 · 試合を読み取り中" : "映像入力中 · カウント読み取り待ち") : "映像入力中 · 試合を検出中";
+  $("savestate").textContent = d.save_status || "";
+  $("savedetail").hidden = !d.last_saved || inMatch || !!st.pending;
+  const folderPicker = $("choose-recording-folder");
+  if (folderPicker) folderPicker.hidden = !window.pywebview?.api?.choose_folder;
   if (!d.reading) {
-    $("matchinfo").textContent = "映像を読んでいません（start.bat から開くと、試合中の様子が出ます）";
+    $("matchinfo").textContent = d.can_start ? "スプラトゥーンが映っているカメラを選ぶと、試合を検出します" : "映像を読んでいません";
+  } else if (inputStale) {
+    $("matchinfo").textContent = "映像が届くまで表示を待っています。キャプチャーボードや OBS を確認してください";
   } else if (!st.in_match && st.pending) {
     $("matchinfo").textContent = "試合が終わりました。勝敗の表示（左上の WIN! / LOSE...）を待っています";
   } else if (!st.in_match) {
@@ -330,24 +429,22 @@ function showState(d) {
       k = `<br>倒した ${pc.kills}人 ／ 倒された <span style="${warn ? "color:#c0392b;font-weight:bold" : ""}">${pc.deaths}回</span>${usual}`;
     }
     const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
-    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}${st.stage ? "　" + st.stage : ""}　${st.clock ? (st.clock.startsWith("延長") ? st.clock : "残り " + st.clock) : mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
+    const label = document.createElement("span");
+    label.textContent = `${st.rule || "ルール不明"}${st.stage ? "　" + st.stage : ""}　${st.clock ? (st.clock.startsWith("延長") ? st.clock : "残り " + st.clock) : mmss(st.elapsed)}`;
+    $("matchinfo").replaceChildren(label);
+    $("matchinfo").insertAdjacentHTML("beforeend", `<br>${c}${me}${k}${ink}`);
   }
   $("campick").classList.toggle("on", !d.reading && d.can_start);
   $("recam").style.display = d.reading && d.can_start ? "" : "none";
   document.querySelectorAll(".btn.mode").forEach(b => b.classList.toggle("on", b.dataset.mode === d.mode));
   if ($("viewsel") && document.activeElement !== $("viewsel")) $("viewsel").value = d.view || "すべて";
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
-  $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
-  if (lastShown === null && $("last") && $("last").classList.contains("on")) { lastShown = d.last_saved || "first"; loadLast(); }
+  if ($("last").classList.contains("on") && (!historyRequest || (lastSaved !== d.last_saved && !inMatch))) loadHistory();
+  lastSaved = d.last_saved;
   if (!window._wc && $("wcheck") && $("wcheck").classList.contains("on")) { window._wc = true; loadWcheck(); }
   if ($("sound") && !window._snd) { window._snd = true; try { $("sound").checked = localStorage.getItem("sc-sound") === "1"; } catch (e) {} }
-  // 新しい試合が保存されたら、「直前の試合」タブをその試合に入れ替える（試合中は作らない）
-  if (d.last_saved && lastShown !== null && lastShown !== d.last_saved && !st.in_match) {
-    lastShown = d.last_saved; if ($("last").classList.contains("on")) loadLast(); else lastShown = null;
-  }
-  if (d.last_saved) $("lastlabel").textContent = "直前の試合（" + d.last_saved.slice(9, 11) + ":" + d.last_saved.slice(11, 13) + " 開始）";
   let html = "", alive = "";
-  if (st.in_match && st.slots) {
+  if (st.in_match && !inputStale && st.slots) {
     st.slots.forEach((x, k) => {
       if (k === 4) html += '<span class="slot gap"></span>';
       const cls = ["slot", k < 4 ? "ally" : "enemy"];
@@ -361,13 +458,17 @@ function showState(d) {
     alive = `人数 ${a} 対 ${e}${a < e ? "（不利）" : a > e ? "（有利）" : ""}<br>スペシャル準備 味方 ${sa} ／ 敵 ${se}`;
   }
   $("slots").innerHTML = html; $("alive").innerHTML = alive;
-  if (d.wp.length) {
-    const p = d.wp[d.wp.length - 1][1];
-    $("wp").textContent = (d.wp_kind === "エリア" ? "勝率 " : "勝率の目安 ") + Math.round(p * 100) + "%";
+  const wpAge = d.wp_at == null ? null : Math.max(0, d.now - d.wp_at);
+  const latest = d.wp[d.wp.length - 1];
+  if (inMatch && !inputStale && st.counts && latest && wpAge != null && wpAge <= 3) {
+    const p = latest[1];
+    $("wp").textContent = "推定勝率 " + Math.round(p * 100) + "%";
     $("wp").style.color = p >= 0.6 ? "#1a7f37" : p <= 0.4 ? "#c0392b" : "";
-    $("wpsub").textContent = d.wp_kind === "エリア" ? "" : "エリアの記録から作った簡単なモデルの値";
+    $("wpsub").textContent = d.wp_kind === "エリア" ? "ガチエリア用モデル" : "参考値 · ガチエリアで学習した簡易モデル";
   } else {
-    $("wp").textContent = "勝率 —"; $("wp").style.color = ""; $("wpsub").textContent = "";
+    $("wp").textContent = "推定勝率 —"; $("wp").style.color = "";
+    $("wpsub").textContent = latest && wpAge != null ? (inMatch ? "更新待ち · " : "前の試合 · ") +
+      "最終更新 " + new Date(d.wp_at * 1000).toLocaleTimeString() : inMatch && !st.counts ? "カウント読み取り待ち" : "";
   }
   drawChart(d.wp);
 }
@@ -412,7 +513,6 @@ document.addEventListener("change", async e => {
 async function poll() {
   try {
     const d = await (await fetch("/api/live?since=" + since)).json();
-    window._last = d;
     showState(d);
     showWeapons(d);
     for (const [i, t] of d.logs) {
@@ -424,10 +524,13 @@ async function poll() {
       clearTimeout(window._nt); window._nt = setTimeout(() => $("notice").classList.remove("on"), 4000);
     }
     since = Math.max(since, d.seq);
-    if (version === null) version = d.version;
     // 試合が保存されたら、まとめを読み直すボタンを出す（自動で読み直すと、ページ作りと画像の読み込みが次の試合の読み取りと重なるため）
     $("reloadbar").classList.toggle("on", d.version !== version);
-  } catch (e) {}
+  } catch (e) {
+    $("inputstate").textContent = "読み取りの状態を取得できません";
+    $("wp").textContent = "推定勝率 —";
+    $("wp").style.color = "";
+  }
   setTimeout(poll, 500);
 }
 poll();
@@ -438,17 +541,11 @@ async function endMatch(result) {
   if (!r.ok) alert("終えられませんでした: " + await r.text());
 }
 
-async function fixLast(result) {
-  const d = window._last;
-  if (!d || !d.last_saved) return;
-  if (!confirm("直前の試合を「" + result + "」にしますか？")) return;
-  await fixResult(d.last_saved + ".json", result);
-}
-
 async function fixResult(file, result) {
+  if (!confirm("この試合の勝敗を「" + result + "」に訂正しますか？")) return;
   const r = await fetch("/api/result", {method: "POST", headers: {"Content-Type": "application/json"},
                                         body: JSON.stringify({file, result})});
-  if (!r.ok) alert("直せませんでした: " + await r.text());
+  if (r.ok) await refreshMatch(file); else alert("直せませんでした: " + await r.text());
 }
 </script>"""
 
@@ -519,8 +616,11 @@ def info_table(store, names):
 
 # ---------- サーバー ----------
 def make_handler(store, get_video_dir, st, cmds, start_camera=None):
+    from . import lastmatch
+
     root = pathlib.Path(store.root).resolve()
     cache = {"version": None, "html": None}
+    cache_lock = threading.Lock()
 
     def link(path):
         p = pathlib.Path(path).resolve()
@@ -534,20 +634,20 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
         return p.as_uri()
 
     def page():
-        with st.lock:
+        with cache_lock:
             info_p = os.path.join(store.root, "weapon_info.json")
             from . import statink
             v = (st.version, weapons.labels_mtime(store),  # 試合が増えたか、ブキの名前・情報や stat.ink の集計が変わったら作り直す
                  os.path.getmtime(info_p) if os.path.exists(info_p) else 0, statink.summary_mtime(store))
-        if cache["version"] != v:
-            cache["html"] = report.render(store, get_video_dir(), link=link,
-                                          first_tabs=[("live", "試合中", LIVE_HTML),
-                                                      ("last", "直前の試合", '<div id="lastbody"><p class="muted">読み込んでいます…</p></div>'),
-                                                      ("wcheck", "ブキの確認", '<div id="wcheckbody"><p class="muted">読み込んでいます…</p></div>')],
-                                          head=APP_CSS, script=APP_JS, lazy=True)
-            cache["version"] = v
-            cache["tabs"] = {}
-        return cache["html"]
+            if cache["version"] != v:
+                cache["html"] = report.render(store, get_video_dir(), link=link,
+                                              first_tabs=[("live", "試合中", LIVE_HTML),
+                                                          ("last", "試合履歴", HISTORY_HTML),
+                                                          ("wcheck", "ブキの確認", '<div id="wcheckbody"><p class="muted">読み込んでいます…</p></div>')],
+                                              head=APP_CSS, script=f"<script>window.summaryVersion = {v[0]};</script>" + APP_JS, lazy=True)
+                cache["version"] = v
+                cache["tabs"] = {}
+            return cache["html"]
 
     def warm():
         """起動したら、試合が始まる前に集計のタブを先に作っておく（初めて開いたときに待たされないように）。"""
@@ -564,9 +664,10 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
     def tab(key):
         """集計のタブの中身。同じ版の間は作ったものを使い回す。"""
         page()  # 版が変わっていれば作り直しの合図を受ける
-        if key not in cache.setdefault("tabs", {}):
-            cache["tabs"][key] = report.tab_body(store, key, get_video_dir(), link, app=True)
-        return cache["tabs"][key]
+        tabs = cache["tabs"]
+        if key not in tabs:
+            tabs[key] = report.tab_body(store, key, get_video_dir(), link, app=True)
+        return tabs[key]
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):
@@ -601,6 +702,16 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                 elif u.path == "/api/tab":
                     k = urllib.parse.parse_qs(u.query).get("k", [""])[0]
                     self._send(200, tab(k).encode("utf-8"), "text/html; charset=utf-8")
+                elif u.path == "/api/summary":
+                    with st.lock:
+                        version = st.version
+                    summary = {"version": version, "subtitle": report.summary_subtitle(store)}
+                    self._send(200, json.dumps(summary, ensure_ascii=False).encode("utf-8"), "application/json; charset=utf-8")
+                elif u.path == "/api/history":
+                    params = urllib.parse.parse_qs(u.query)
+                    filters = {key: values[0] for key, values in params.items()}
+                    body = lastmatch.history_html(store, filters)
+                    self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/wcheck":
                     try:
                         body = review_html(store, link)
@@ -608,12 +719,8 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         body = f'<p class="muted">作れませんでした: {report.ESC(str(e))}</p>'
                     self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/last":
-                    from . import lastmatch
                     f = urllib.parse.parse_qs(u.query).get("file", [None])[0]
-                    try:
-                        body = lastmatch.html_for(store, link, get_video_dir(), f)
-                    except Exception as e:
-                        body = f'<p class="muted">作れませんでした: {report.ESC(str(e))}</p>'
+                    body = lastmatch.html_for(store, link, get_video_dir(), f)
                     self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/live":
                     since = int(urllib.parse.parse_qs(u.query).get("since", ["0"])[0])
@@ -656,23 +763,31 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/config":
                     from .storage import MODES
-                    cfg = store.load_config()
-                    if body.get("mode") in MODES:
-                        cfg["mode"] = body["mode"]
-                    if body.get("view") in MODES + ("すべて",):
-                        cfg["view"] = body["view"]
-                    store.save_config(cfg)
+                    if "video_dir" in body:
+                        folder = str(body["video_dir"]).strip().strip('"')
+                        if folder and not os.path.isdir(folder):
+                            self._send(400, "指定した録画フォルダが見つかりません".encode("utf-8"), "text/plain; charset=utf-8")
+                            return
                     with st.lock:
+                        cfg = store.load_config()
+                        if body.get("mode") in MODES:
+                            cfg["mode"] = body["mode"]
+                        if body.get("view") in MODES + ("すべて",):
+                            cfg["view"] = body["view"]
+                        if "video_dir" in body:
+                            cfg["video_dir"] = os.path.abspath(folder) if folder else None
+                        store.save_config(cfg)
                         st.mode, st.view = store.mode(), store.view() or "すべて"
-                        if "view" in body:
+                        if "view" in body or "video_dir" in body:
                             st.version += 1  # まとめを作り直させる
                     self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/match_mode" and body.get("file"):
                     from .storage import MODES
                     if body.get("mode") not in MODES:
                         raise ValueError("種類が違います")
-                    store.update(os.path.basename(str(body["file"])), {"mode": body["mode"]})
                     with st.lock:
+                        store.update(os.path.basename(str(body["file"])), {"mode": body["mode"]})
+                        st.version += 1
                         st._push(st.logs, f"試合の種類を直しました: {body['file']} → {body['mode']}")
                     self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/clips" and body.get("file"):
@@ -696,11 +811,12 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
                     f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None
-                    store.update(f, {"stage": name})
-                    if name:
-                        save_stage_label(store, os.path.splitext(f)[0], name)
                     with st.lock:
+                        store.update(f, {"stage": name})
+                        st.version += 1
                         st._push(st.logs, f"ステージを直しました: {f} → {name or '（消した）'}")
+                    if name and os.path.isfile(os.path.join(store.root, "stages", os.path.splitext(f)[0] + ".png")):
+                        save_stage_label(store, os.path.splitext(f)[0], name)
                     self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/end":
                     if cmds is None:
@@ -710,8 +826,8 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         cmds.put(("end", r if r in ("勝ち", "負け") else None))
                         self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/result" and body.get("result") in ("勝ち", "負け"):
-                    store.set_result(body["file"], body["result"])
                     with st.lock:
+                        store.set_result(body["file"], body["result"])
                         st.version += 1  # 画面を読み直させる
                         st._push(st.logs, f"勝敗を手で直しました: {body['file']} → {body['result']}")
                     self._send(200, b"ok", "text/plain")
@@ -799,6 +915,11 @@ def open_window(url):
     holder = {}
 
     class Api:
+        def choose_folder(self):
+            dialog = webview.FileDialog.FOLDER if hasattr(webview, "FileDialog") else webview.FOLDER_DIALOG
+            chosen = holder["w"].create_file_dialog(dialog, allow_multiple=False)
+            return chosen[0] if chosen else None
+
         def set_compact(self, on):
             w = holder["w"]
             w.resize(*(COMPACT_SIZE if on else FULL_SIZE))
@@ -846,6 +967,8 @@ def main():
         def run():
             try:
                 live.worker(frames, store, source, q, Both(), cmds)
+            except (OSError, RuntimeError) as e:
+                q.put(("log", f"映像の読み取りを続けられませんでした: {e}"))
             finally:
                 close = getattr(frames, "close", None)
                 if close:
@@ -878,9 +1001,10 @@ def main():
             def again():
                 yield first
                 yield from frames
-            cfg = store.load_config()
-            cfg["camera"] = index
-            store.save_config(cfg)
+            with st.lock:
+                cfg = store.load_config()
+                cfg["camera"] = index
+                store.save_config(cfg)
             begin(again(), "camera")
             return None
 

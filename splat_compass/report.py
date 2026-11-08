@@ -490,12 +490,15 @@ def section_model(store, ms):
         out.append(card("モデルの育ち具合（作り直すたびの精度）",
                         line_chart([("AUC（高いほど良い）", "#3d7bd9", pts_auc)], lo - 0.02, hi + 0.02,
                                    yfmt=lambda v: f"{v:.3f}", xlabel="作り直した回数（古い→新しい）")
-                        + f'<p class="muted">最新: {hist[-1]["matches"]}試合 / AUC {hist[-1]["oof_auc"]:.3f} / 対数損失 {hist[-1]["oof_logloss"]:.3f}</p>'))
+                        + f'<p class="muted">最新: {hist[-1]["matches"]}試合 / AUC {hist[-1]["oof_auc"]:.3f} / 対数損失 {hist[-1]["oof_logloss"]:.3f}</p>'
+                        + '<p class="muted">学習履歴はガチ・エンジョイ両方のガチエリアが対象です。AUC は勝ち試合を高く見積もれるかの指標です。</p>'))
     if len(am) >= 20:
         X, y, g, ts, p, w, ya = winprob.oof_predict(am, aux=winprob.USE_AUX, spl=winprob.USE_SPLINE)
         cal = winprob.calibration(y, p, w)
-        out.append(card("予測した勝率と実際の勝率", table(["予測した勝率", "予測の平均", "実際に勝った割合"],
-                        [[f"{a * 100:.0f}〜{min(b, 1) * 100:.0f}%", pct(pm), pct(ym)] for a, b, pm, ym, n in cal])))
+        out.append(card("予測した勝率と実際の勝率",
+                        f'<p class="muted">現在の集計対象のガチエリア {len(am)}試合で評価しています。</p>'
+                        + table(["予測した勝率", "予測の平均", "実際に勝った割合"],
+                                [[f"{a * 100:.0f}〜{min(b, 1) * 100:.0f}%", pct(pm), pct(ym)] for a, b, pm, ym, n in cal])))
         vals = winprob.event_values(am, ts, g, p, after=15.0)
         items = []
         for key in [("自分", "倒した"), ("敵", "倒された"), ("自分", "スペシャル発動"), ("味方", "スペシャル発動"),
@@ -506,8 +509,9 @@ def section_model(store, ms):
         rows = "".join(
             f'<div class="bar"><span class="bl">{ESC(k)}</span><span class="bt center">'
             f'<span class="bf {"pos" if v >= 0 else "neg"}" style="width:{min(abs(v) / 0.08, 1) * 50:.1f}%"></span></span>'
-            f'<span class="bv">{v * 100:+.1f}%</span></div>' for k, v in items)
-        out.append(card("出来事の前後で勝率がどれだけ動いたか（15秒後まで）", f'<div class="bars">{rows}</div>'))
+            f'<span class="bv">{v * 100:+.1f}pt</span></div>' for k, v in items)
+        out.append(card("出来事の前後で動いた推定勝率（15秒後まで）", f'<div class="bars">{rows}</div>'
+                        '<p class="muted">味方や相手の動き、カウントの変化も含む平均です。</p>'))
     else:
         out.append(card("勝率モデル", f'<p class="muted">ガチエリアの試合が20試合たまると作られます（いま {len(am)}試合）</p>'))
     return '<div class="grid2">' + "".join(out) + "</div>"
@@ -541,7 +545,7 @@ def section_feedback(store, link=None, app=False):
         blocks.append(f'<section><h2>{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
                       f'<span class="res-{ESC(res)}">{ESC(res)}</span></h2>{fix}<ul class="fb">{lis}</ul>{dl}</section>')
     return ('<p class="muted">新しい15試合を、それぞれの試合より前の自分（普段の自分）と比べて、目立ったところだけを挙げています。'
-            '時刻は試合開始からの秒です。</p>' + trend_card(store) + "".join(blocks))
+            '時刻はゲーム内の残り時間です。</p>' + trend_card(store) + "".join(blocks))
 
 
 def trend_card(store):
@@ -614,7 +618,7 @@ ul.fb {{ list-style:none; padding:0; margin:0; font-size:13px; }} ul.fb li {{ pa
 .fix {{ display:flex; align-items:center; gap:8px; margin:2px 0 6px; font-size:12px; }} .fix img {{ border-radius:4px; }}
 .fix button {{ font-size:12px; padding:2px 8px; cursor:pointer; }}
 </style>{head}</head><body>
-<header><h1>splat-compass</h1><span>{subtitle}</span></header>
+<header><h1>splat-compass</h1><span id="summary-subtitle">{subtitle}</span></header>
 <nav>{tabs}</nav>
 <main>{bodies}</main>
 <script>
@@ -675,16 +679,18 @@ document.addEventListener("change", e => {{
 }});
 // あとから読み込むタブ（アプリ）: 開いたときに中身を取りに行く
 async function loadTab(t) {{
-  if (!t || t.dataset.lazy !== "1" || t.dataset.loading) return;
-  t.dataset.loading = "1";
+  if (!t || t.dataset.lazy !== "1" || t.loadRequest) return;
+  const request = {{}};
+  t.loadRequest = request;
   const started = Date.now();
-  const tick = setInterval(() => {{ const p = t.querySelector(".loading"); if (p) p.textContent = "集計しています… " + Math.round((Date.now() - started) / 1000) + "秒"; }}, 1000);
+  const tick = setInterval(() => {{ const p = t.querySelector(".loading"); if (p && t.loadRequest === request) p.textContent = "集計しています… " + Math.round((Date.now() - started) / 1000) + "秒"; }}, 1000);
   try {{
     const r = await fetch("/api/tab?k=" + encodeURIComponent(t.id));
-    t.innerHTML = await r.text();
-    t.dataset.lazy = "";
-  }} catch (e) {{ t.innerHTML = '<p class="muted">読み込めませんでした</p>'; }}
-  clearInterval(tick); delete t.dataset.loading;
+    const body = await r.text();
+    if (!r.ok) throw new Error(body);
+    if (t.loadRequest === request) {{ t.innerHTML = body; t.dataset.lazy = ""; }}
+  }} catch (e) {{ if (t.loadRequest === request) t.innerHTML = '<p class="muted">読み込めませんでした。タブを開き直すと再試行できます。</p>'; }}
+  clearInterval(tick); if (t.loadRequest === request) delete t.loadRequest;
 }}
 document.querySelectorAll("nav button").forEach(b => b.addEventListener("click", () => loadTab(document.getElementById(b.dataset.tab))));
 loadTab(document.querySelector(".tab.on"));
@@ -697,23 +703,46 @@ def _matches(store):
     return ms
 
 
+def summary_subtitle(store):
+    from . import __version__
+
+    view = store.view()
+    return f"{view + ' ' if view else ''}{len(_matches(store))}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点 ・ 版 {__version__}"
+
+
+def recording_settings(video_dir):
+    return ('<form class="card recording-settings" onsubmit="setConfig({video_dir: document.getElementById(\'recording-folder\').value}); return false">'
+            '<label>録画フォルダ <input id="recording-folder" type="text" placeholder="例：D:\\Spla Capture" '
+            f'value="{ESC(str(video_dir or ""))}"></label> <button class="btn" type="submit">設定を保存</button> '
+            '<button class="btn" id="choose-recording-folder" type="button" onclick="chooseRecordingFolder()" hidden>フォルダを選ぶ</button>'
+            '<p class="muted">OBS の録画を保存しているフォルダを指定してください。ライブで記録した試合は、日時つきの録画ファイル名から結びつけます。'
+            '設定を解除するには、入力欄を空にして保存してください。</p></form>')
+
+
 def tab_list(store, video_dir=None, link=scenes.file_link, app=False):
     """集計のタブ [(キー, 名前, 中身を作る関数)]。"""
     ms = _matches(store)
-    tabs = [("overview", "概要", lambda: section_overview(ms)),
-            ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link, app)),
+    tabs = [("overview", "概要", lambda: section_overview(ms) + (trend_card(store) if app else "")),
             ("rules", "ルール別・打開", lambda: section_rules(ms, store)),
             ("stages", "ステージ別", lambda: section_stages(ms)),
             ("killers", "倒されたブキ", lambda: section_killers(store, ms)),
             ("weapons", "ブキ別の勝率", lambda: section_weapons(store, ms)),
             ("model", "勝率モデル", lambda: section_model(store, ms))]
-    if video_dir and os.path.isdir(video_dir):
+    if not app:
+        tabs.insert(1, ("feedback", "試合ごとの振り返り", lambda: section_feedback(store, link)))
+    if app or (video_dir and os.path.isdir(video_dir)):
         def sc():
+            settings = recording_settings(video_dir) if app else ""
+            if not video_dir or not os.path.isdir(video_dir):
+                message = "設定した録画フォルダが見つかりません。" if video_dir else "録画フォルダが未設定です。"
+                return settings + f'<p class="muted">{message}</p>'
             secs, kinds, total = scenes.scene_sections(store, video_dir, last=60, link=link)
-            return ('<div id="player"><video id="v" controls preload="none"></video>'
+            if not secs:
+                return settings + '<p class="muted">見返せる場面がありません。録画ファイルと集計の対象を確認してください。</p>'
+            return (settings + '<div id="player"><video id="v" controls preload="none"></video>'
                     '<div id="now">場面の「再生」を押すと、ここで再生します</div></div>'
                     f'<div class="filters">{scenes.filters_html(kinds)}</div>'
-                    f'<p class="muted">新しい60試合から {total}場面</p>' + "".join(secs))
+                    f'<p class="muted">録画が見つかった直近最大60試合から {total}場面</p>' + "".join(secs))
         tabs.append(("scenes", "見返す場面", sc))
     return tabs
 
@@ -732,7 +761,6 @@ def tab_body(store, key, video_dir=None, link=scenes.file_link, app=False):
 def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="", script="", lazy=False):
     """まとめのページの HTML。first_tabs: 先頭に足すタブ [(キー, 名前, HTML)]（アプリの「試合中」など）。
     lazy=True なら集計のタブの中身は作らず、開いたときに読み込む（アプリ用。ページがすぐ出る）。"""
-    ms = _matches(store)
     tabs = [(k, t, (lambda b=b: b)) for k, t, b in first_tabs]
     tabs += tab_list(store, video_dir, link, bool(first_tabs))
     nav = "".join(f'<button data-tab="{k}" class="{"on" if i == 0 else ""}">{ESC(t)}</button>' for i, (k, t, _) in enumerate(tabs))
@@ -748,10 +776,7 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
         except Exception as e:  # 1つの集計が失敗しても、ほかは見られるようにする
             body = f'<p class="muted">この集計を作れませんでした: {ESC(str(e))}</p>'
         bodies += f'<div class="tab{" on" if i == 0 else ""}" id="{k}">{body}</div>'
-    view = store.view()
-    from . import __version__
-    sub = f"{view + ' ' if view else ''}{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点 ・ 版 {__version__}"
-    return PAGE.format(subtitle=ESC(sub), tabs=nav, bodies=bodies, head=head, script=script)
+    return PAGE.format(subtitle=ESC(summary_subtitle(store)), tabs=nav, bodies=bodies, head=head, script=script)
 
 
 def build(store, video_dir=None):

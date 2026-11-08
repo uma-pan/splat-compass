@@ -151,7 +151,7 @@ def describe(d):
     if d["ally"] is not None and d["enemy"] is not None:
         s += f"（{d['ally']}対{d['enemy']}）"
     if d["drop"] is not None and abs(d["drop"]) >= 0.02:
-        s += f" 勝率 {d['drop'] * 100:+.0f}%"
+        s += f" 推定勝率 {d['drop'] * 100:+.0f}pt"
     return s
 
 

@@ -29,7 +29,10 @@ AFTER = {"deaths": 3.0, "kills": 2.0, "swings": 4.0}
 
 def _rec_start(path):
     m = re.search(r"(\d{4})-(\d{2})-(\d{2}) (\d{2})-(\d{2})-(\d{2})", os.path.basename(path))
-    return dt.datetime(*map(int, m.groups())) if m else None
+    try:
+        return dt.datetime(*map(int, m.groups())) if m else None
+    except ValueError:
+        return None
 
 
 def _duration(path):
@@ -40,29 +43,37 @@ def _duration(path):
     return n / fps if fps else 0.0
 
 
-def locate(m, video_dir):
+def recording_times(video_dir):
+    """OBS 形式の名前から開始時刻を読める録画を、古い順に返す。"""
+    paths = glob.glob(os.path.join(video_dir, "*.mp4")) + glob.glob(os.path.join(video_dir, "*.mkv"))
+    return sorted((start, path) for path in paths if (start := _rec_start(path)) is not None)
+
+
+def locate(m, video_dir, recordings=None, durations=None):
     """(録画のパス, 試合開始が録画の何秒目か)。見つからなければ None。"""
     if not video_dir:
         return None
     src = m.get("source") or ""
     if src and src != "camera":
         p = src if os.path.isabs(src) else os.path.join(video_dir, src)
-        return (p, m["video_start"]) if os.path.exists(p) else None
+        return (p, m["video_start"]) if os.path.isfile(p) else None
     # カメラから読んだ試合: 同じ時間に録っていた録画を探す
     try:
         played = dt.datetime.fromisoformat(m["played_at"])
     except (KeyError, ValueError):
         return None
-    cands = []
-    for p in glob.glob(os.path.join(video_dir, "*.mp4")) + glob.glob(os.path.join(video_dir, "*.mkv")):
-        st = _rec_start(p)
-        if st is not None and st <= played:
-            cands.append((st, p))
-    if not cands:
+    if recordings is None:
+        recordings = recording_times(video_dir)
+    candidate = next(((start, path) for start, path in reversed(recordings) if start <= played), None)
+    if candidate is None:
         return None
-    st, p = max(cands)  # 試合より前に始まった録画のうち、一番新しいもの
+    st, p = candidate
     off = (played - st).total_seconds()
-    if off + (m["video_end"] - m["video_start"]) <= _duration(p) + 1:
+    if durations is None:
+        durations = {}
+    if p not in durations:
+        durations[p] = _duration(p)
+    if durations[p] > 0 and off + (m["video_end"] - m["video_start"]) <= durations[p] + 1:
         return p, off
     return None
 

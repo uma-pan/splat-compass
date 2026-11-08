@@ -162,8 +162,8 @@ def match_feedback(m, base, store=None):
             out.append(("気になる", f"エリアの打開に時間がかかった 平均{avg:.0f}秒（普段は {base['dakai_sec']:.0f}秒）"))
     if store is not None and m.get("killed_by"):
         labels, protos = killcam.load_labels(store)
-        names = [killcam.name_of(store, os.path.join(store.root, "killcam", k["image"]), labels, protos)
-                 for k in m["killed_by"]]
+        paths = [os.path.join(store.root, "killcam", k["image"]) for k in m["killed_by"]]
+        names = [killcam.name_of(store, path, labels, protos) for path in paths if os.path.isfile(path)]
         c = Counter(x for x in names if x)
         if c:
             name, k = c.most_common(1)[0]
@@ -176,16 +176,6 @@ def match_feedback(m, base, store=None):
         pass
     if not out:
         out.append(("情報", "普段と比べて大きく違うところはありませんでした"))
-    if store is not None:
-        try:
-            from . import learning
-            c = learning.contribution(store, m)
-        except Exception:
-            c = None
-        if c and any(v[0] for v in c.values()):
-            parts = [f"{k} {v[0]}回 {v[1] * 100:+.0f}%" for k, v in c.items() if v[0]]
-            total = sum(v[1] for v in c.values())
-            out.append(("情報", f"自分の行動の前後で動いた勝率（合計 {total * 100:+.0f}%）: " + "、".join(parts)))
     order = {"気になる": 0, "良い": 1, "情報": 2}
     return sorted(out, key=lambda x: order[x[0]])
 

@@ -6,6 +6,7 @@ import datetime as dt
 import glob
 import json
 import os
+import tempfile
 
 from .tracker import ROW_HEADER
 
@@ -21,6 +22,18 @@ def mode_name(v):
 def mode_of(m):
     """試合の種類。種類を記録する前の試合はガチとみなす。"""
     return mode_name(m.get("mode")) or "ガチ"
+
+
+def _write_json(path, data):
+    """集計が読み取りの途中で未完成の JSON に当たらないようにする。"""
+    tmp = tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=os.path.dirname(path), delete=False)
+    try:
+        with tmp:
+            json.dump(data, tmp, ensure_ascii=False, indent=1)
+        os.replace(tmp.name, path)
+    finally:
+        if os.path.exists(tmp.name):
+            os.unlink(tmp.name)
 
 
 class Store:
@@ -113,8 +126,7 @@ class Store:
             "result_check": result_check,
             "kills": [{"t": round(t, 1), "rel": round(t - m.start, 1)} for t in getattr(m, "kills", [])],
         }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=1)
+        _write_json(path, data)
         return path
 
     def matches(self, all=False):
@@ -165,8 +177,7 @@ class Store:
         d["result"] = result
         d["interrupted"] = result is None and d.get("interrupted", False)
         d["result_fixed"] = True
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
+        _write_json(p, d)
 
     def update(self, fname, fields):
         """試合の記録の一部の項目を書き換える。"""
@@ -174,8 +185,7 @@ class Store:
         with open(p, encoding="utf-8") as f:
             d = json.load(f)
         d.update(fields)
-        with open(p, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=1)
+        _write_json(p, d)
 
     def load(self, path):
         with open(path, encoding="utf-8") as f:
@@ -208,8 +218,7 @@ class Store:
             return {}
 
     def save_config(self, cfg):
-        with open(os.path.join(self.root, "config.json"), "w", encoding="utf-8") as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=1)
+        _write_json(os.path.join(self.root, "config.json"), cfg)
 
     # 録画フォルダの処理済み一覧
     def _done_path(self):
