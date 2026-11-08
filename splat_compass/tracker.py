@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, read_counts, read_objective_pos, read_penalty, read_slots)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -77,6 +77,7 @@ class Match:
     respawn_marks: list = field(default_factory=list)  # 自分の復活待ち表示が出た時刻
     timeline: list = field(default_factory=list)  # 1秒ごとの [時刻, 味方カウント, 敵カウント, 味方の箱が塗られている, 敵の箱が塗られている, 味方ペナルティ, 敵ペナルティ]
     map_shots: list = field(default_factory=list)  # [(時刻, マップ画面の縮小画像)]
+    inks: list = field(default_factory=list)  # [(時刻, マップから読んだ味方の塗りの割合)]
     killcams: list = field(default_factory=list)  # [(時刻, 倒されたときの吹き出しの切り抜き)]
     kills: list = field(default_factory=list)  # 自分が相手を倒した時刻（画面の下の「〇〇 をたおした!」）
     icons: list = field(default_factory=lambda: [None] * 8)  # 8人のブキのアイコン（生きている時の絵）
@@ -196,8 +197,16 @@ class Tracker:
             elif self.match.rule in ("ガチヤグラ", "ガチホコ", None):
                 self._bubble_counts(t, img)
             on_map = is_map_screen(img)
-            if on_map and not self.map_prev:  # マップ画面が出るたびに1枚残す
-                self.match.map_shots.append((t, cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)))
+            # マップ画面が出るたびに1枚残す。出始めは半透明で描かれている途中なので、次に見たとき（約1秒後）に撮る
+            if on_map and self.map_prev and not self.map_taken:
+                small = cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)
+                self.match.map_shots.append((t, small))
+                ink = read_map_ink(small, team_hues(self.match.icons))
+                if ink is not None:
+                    self.match.inks.append((round(t, 1), round(ink, 3)))
+                self.map_taken = True
+            if not on_map:
+                self.map_taken = False
             self.map_prev = on_map
             rule = self.match.rule
             if rule in ("ガチヤグラ", "ガチホコ", None) and self.match.checkpoints is None:
@@ -302,6 +311,7 @@ class Tracker:
         self.resp_prev = False
         self.cp_bands = []
         self.map_prev = False
+        self.map_taken = False
         self.icon_caps = [[] for _ in range(8)]
         self.timer_seen = None
         self.kill_n, self.kill_pend, self.kill_pend_n = 0, 0, 0

@@ -418,3 +418,65 @@ class ScreenReader:
             if q > score:
                 best, score = k, q
         return (best, score) if score >= 0.4 else (None, score)
+
+
+# ---------- マップ画面の塗り ----------
+def team_hues(icons):
+    """8人のアイコン（RGB）から、(味方の色合い, 敵の色合い)。OpenCV の色相（0〜179）。分からなければ None。"""
+    out = []
+    for ks in (range(4), range(4, 8)):
+        hs = []
+        for k in ks:
+            ic = icons[k] if icons else None
+            if ic is None:
+                continue
+            hsv = cv2.cvtColor(np.ascontiguousarray(ic), cv2.COLOR_RGB2HSV)
+            m = (hsv[..., 1] > 120) & (hsv[..., 2] > 90)
+            hs.append(hsv[..., 0][m].astype(float))
+        hs = np.concatenate(hs) if hs else np.array([])
+        if len(hs) < 200:
+            return None
+        a = hs * np.pi / 90  # 色相は輪なので、角度の平均をとる
+        out.append(float(np.angle(np.mean(np.exp(1j * a))) * 90 / np.pi % 180))
+    return out
+
+
+def _map_mask(img):
+    """マップの部分。マップはくっきり描かれ、後ろはぼかされているので、くっきりした所の一番大きな塊をとる。"""
+    h, w = img.shape[:2]
+    g = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    sharp = cv2.blur(np.abs(cv2.Laplacian(g, cv2.CV_32F, ksize=3)), (7, 7))
+    m = (sharp > 10).astype(np.uint8)
+    roi = np.zeros_like(m)
+    roi[int(.12 * h):int(.9 * h), int(.27 * w):int(.73 * w)] = 1  # 左右の名前の札や右上のブキの一覧を除く
+    m = cv2.morphologyEx(m * roi, cv2.MORPH_CLOSE, np.ones((15, 15), np.uint8))
+    n, lab, st, _ = cv2.connectedComponentsWithStats(m)
+    if n <= 1:
+        return m.astype(bool)
+    m = (lab == 1 + np.argmax(st[1:, 4])).astype(np.uint8)
+    cs, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    f = np.zeros_like(m)
+    cv2.drawContours(f, cs, -1, 1, -1)
+    crisp = cv2.dilate((sharp > 5).astype(np.uint8), np.ones((13, 13), np.uint8))
+    return (f & crisp).astype(bool)
+
+
+def read_map_ink(img, hues):
+    """マップ画面（RGB、960x540 想定）から、味方の塗りの割合（味方 ÷ (味方+敵)）。読めなければ None。
+    hues: team_hues の戻り値。マップのインクは明るさに濃淡があるので、色合いだけで見分ける。"""
+    if hues is None:
+        return None
+    if img.shape[1] != 960:
+        img = cv2.resize(img, (960, 540), interpolation=cv2.INTER_AREA)
+    m = _map_mask(img)
+    if not 0.12 < m.mean() < 0.45:
+        return None
+    hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)
+    hh = hsv[..., 0].astype(np.int16)
+    sat = m & (hsv[..., 1] > 100) & (hsv[..., 2] > 70)
+    d = [np.minimum(np.abs(hh - int(h)), 180 - np.abs(hh - int(h))) for h in hues]
+    a = (sat & (d[0] < 12) & (d[0] < d[1])).sum()
+    e = (sat & (d[1] < 12) & (d[1] < d[0])).sum()
+    if a + e < 0.15 * m.sum():
+        return None
+    return float(a / (a + e))

@@ -86,6 +86,7 @@ class Store:
             "checkpoints": m.checkpoints,
             "killed_by": killed_by,
             "map_shots": map_shots,
+            "inks": [[t, round(t - m.start, 1), v] for t, v in getattr(m, "inks", [])],
             "weapon_icons": weapon_icons,
             "result_check": result_check,
             "kills": [{"t": round(t, 1), "rel": round(t - m.start, 1)} for t in getattr(m, "kills", [])],

@@ -119,7 +119,8 @@ def status_dict(tr, t):
     d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1),
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
-         "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills)}
+         "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills),
+         "ink": [m.inks[-1][1], round(t - m.inks[-1][0])] if m.inks else None}
     return d
 
 

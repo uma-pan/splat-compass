@@ -223,7 +223,8 @@ function showState(d) {
       me = "自分 " + (x === 0 ? "復活待ち" : x === 2 ? "スペシャルあり" + (st.hold ? `（${Math.floor(st.hold)}秒）` : "") : "生きている");
     }
     const k = st.kills !== undefined ? `<br>倒した ${st.kills}人` : "";
-    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}`;
+    const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
+    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
   }
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
