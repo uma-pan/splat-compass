@@ -13,7 +13,7 @@ import html
 import json
 import os
 
-from . import coach, feedback, learning, weapons, winprob
+from . import clock, coach, feedback, learning, weapons, winprob
 from .hud import SLOT_NAMES, STAGES
 
 ESC = html.escape
@@ -25,7 +25,7 @@ def _mmss(sec):
 
 
 def recent(store, n=20):
-    ms = sorted([m for m in store.matches() if m.get("video_end") and not m.get("interrupted")],
+    ms = sorted([m for m in store.matches(all=True) if m.get("video_end") and not m.get("interrupted")],
                 key=lambda m: m.get("played_at", ""))
     return ms, ms[-n:][::-1]
 
@@ -39,8 +39,12 @@ def _chart(m, pr, me_events, kills, W=720, H=200):
              f'<text x="34" y="{y(1) + 4:.1f}" text-anchor="end" font-size="11" fill="#888">100%</text>',
              f'<text x="34" y="{y(0.5) + 4:.1f}" text-anchor="end" font-size="11" fill="#888">50%</text>',
              f'<text x="34" y="{y(0) + 4:.1f}" text-anchor="end" font-size="11" fill="#888">0%</text>']
-    for mm in range(0, int(dur // 60) + 1):
-        parts.append(f'<text x="{x(mm * 60):.1f}" y="{H - 8}" text-anchor="middle" font-size="11" fill="#888">{mm}:00</text>')
+    g = clock.go_rel(m)
+    g = clock.GO_OFFSET if g is None else g
+    for mm in range(5, -1, -1):  # 残り 5:00, 4:00, … の位置に目盛り
+        rel = g + (5 - mm) * 60
+        if rel <= dur:
+            parts.append(f'<text x="{x(rel):.1f}" y="{H - 8}" text-anchor="middle" font-size="11" fill="#888">{mm}:00</text>')
     tl = m.get("timeline") or []
     if tl:  # カウントの進み（残りが減るほど上に行く。味方は青、敵は橙）
         for col, color in ((1, "#9ec5fe"), (2, "#ffd0a8")):
@@ -52,9 +56,9 @@ def _chart(m, pr, me_events, kills, W=720, H=200):
         parts.append(f'<polyline points="{pts}" fill="none" stroke="#1f6feb" stroke-width="2"/>')
     for rel, kind in me_events:
         color = {"倒された": "#c0392b", "スペシャル": "#d4a000"}[kind]
-        parts.append(f'<circle cx="{x(rel):.1f}" cy="{H - 26}" r="4" fill="{color}"><title>{_mmss(rel)} {kind}</title></circle>')
+        parts.append(f'<circle cx="{x(rel):.1f}" cy="{H - 26}" r="4" fill="{color}"><title>{clock.fmt(m, rel)} {kind}</title></circle>')
     for rel in kills:
-        parts.append(f'<circle cx="{x(rel):.1f}" cy="{H - 34}" r="4" fill="#1a7f37"><title>{_mmss(rel)} 倒した</title></circle>')
+        parts.append(f'<circle cx="{x(rel):.1f}" cy="{H - 34}" r="4" fill="#1a7f37"><title>{clock.fmt(m, rel)} 倒した</title></circle>')
     legend = ('<div class="muted" style="font-size:12px">青い線: 勝率　薄い線: カウントの進み（上ほど勝ちに近い。青が味方・橙が敵）　'
               '<span style="color:#1a7f37">●</span>倒した　<span style="color:#c0392b">●</span>倒された　'
               '<span style="color:#d4a000">●</span>スペシャル</div>')
@@ -68,7 +72,8 @@ def html_for(store, link, video_dir=None, file=None):
     m = next((x for x in ms if x["_file"] == file), None) if file else None
     m = m or ms[-1]
     i = ms.index(m)
-    base = feedback.baseline(ms[:i])
+    from .storage import mode_of
+    base = feedback.baseline([x for x in ms[:i] if mode_of(x) == mode_of(m)])  # 普段の自分は同じ種類の試合から
     me = m.get("me_slot")
     dur = m["video_end"] - m["video_start"]
     res = m.get("result") or "勝敗不明"
@@ -78,7 +83,8 @@ def html_for(store, link, video_dir=None, file=None):
 
     # 試合の選び直し
     opts = "".join(f'<option value="{ESC(x["_file"])}"{" selected" if x is m else ""}>'
-                   f'{ESC(x.get("played_at", "")[5:16].replace("T", " "))} {ESC(x.get("rule") or "ルール不明")} {ESC(x.get("result") or "")}</option>'
+                   f'{ESC(x.get("played_at", "")[5:16].replace("T", " "))} {ESC(x.get("rule") or "ルール不明")} {ESC(x.get("result") or "")}'
+                   f'{"（それ以外）" if x.get("mode") == "それ以外" else ""}</option>'
                    for x in rec)
     out = [f'<div class="lm-head"><select onchange="loadLast(this.value)">{opts}</select></div>']
     names = weapons.weapons_of(store, m) if m.get("weapon_icons") else None
@@ -87,6 +93,10 @@ def html_for(store, link, video_dir=None, file=None):
     out.append(f'<h2 class="lm-title">{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
                f'{ESC(stage or "")}　<span class="res-{ESC(res)}">{ESC(res)}</span>　<span class="muted">{_mmss(dur)}'
                f'{"　" + ESC(my_weapon) if my_weapon else ""}</span></h2>')
+    mode = m.get("mode") or "Xマッチ"
+    btns = "".join(f'<button class="btn mode{" on" if mode == k else ""}" onclick="setMatchMode({ESC(json.dumps(m["_file"]))}, {ESC(json.dumps(k))})">{k}</button> '
+                   for k in ("Xマッチ", "それ以外"))
+    out.append(f'<div class="lm-stage">この試合の記録: {btns}</div>')
     stem = os.path.splitext(m["_file"])[0]
     crop = os.path.join(store.root, "stages", stem + ".png")
     if os.path.exists(crop):  # ステージの名前を付ける・直す
@@ -152,8 +162,8 @@ def html_for(store, link, video_dir=None, file=None):
     # 倒された場面
     ds = coach.deaths(m, wp) or []
     if ds:
-        trs = "".join(f'<tr><td>{_mmss(d["rel"])}</td><td style="text-align:left">{ESC(coach.describe(d))}</td>'
-                      f'<td>{play_btn(d["t"], _mmss(d["rel"]) + " 倒された")}</td></tr>' for d in ds)
+        trs = "".join(f'<tr><td>{clock.fmt(m, d["rel"])}</td><td style="text-align:left">{ESC(coach.describe(d))}</td>'
+                      f'<td>{play_btn(d["t"], clock.fmt(m, d["rel"]) + " 倒された")}</td></tr>' for d in ds)
         out.append(f'<div class="card wide"><h3>倒された場面 {len(ds)}回</h3>'
                    f'<table><tr><th>時刻</th><th style="text-align:left">そのときの状況</th><th></th></tr>{trs}</table></div>')
 
@@ -180,9 +190,9 @@ def html_for(store, link, video_dir=None, file=None):
                 what = [f"{e[2]} {e[3]}" for e in m["events"] if a - 1 <= e[0] <= b and ("倒された" in e[3] or e[3] == "スペシャル発動")]
                 what += ["自分が倒した" for k in m.get("kills") or [] if a - 1 <= k["t"] <= b]
                 rel = a - m["video_start"]
-                rows.append(f'<tr><td>{_mmss(rel)}</td><td class="{"good" if d > 0 else "bad"}">{d * 100:+.0f}%</td>'
+                rows.append(f'<tr><td>{clock.fmt(m, rel)}</td><td class="{"good" if d > 0 else "bad"}">{d * 100:+.0f}%</td>'
                             f'<td style="text-align:left">{ESC("、".join(what[:6]) or "（出来事なし。カウントや確保の動き）")}</td>'
-                            f'<td>{play_btn(a + 2, _mmss(rel) + " 勝率 " + format(d * 100, "+.0f") + "%")}</td></tr>')
+                            f'<td>{play_btn(a + 2, clock.fmt(m, rel) + " 勝率 " + format(d * 100, "+.0f") + "%")}</td></tr>')
             out.append('<div class="card wide"><h3>勝率が大きく動いた場面（5秒のあいだに8%以上）</h3>'
                        '<table><tr><th>時刻</th><th>勝率</th><th style="text-align:left">そのとき起きたこと</th><th></th></tr>'
                        + "".join(rows) + "</table></div>")
@@ -213,7 +223,7 @@ def html_for(store, link, video_dir=None, file=None):
         imgs = []
         for x in shots:
             ink = inks.get(round(x["rel"]))
-            cap = f'{_mmss(x["rel"])}' + (f' 塗り {ink * 100:.0f}%' if ink is not None else "")
+            cap = f'{clock.fmt(m, x["rel"])}' + (f' 塗り {ink * 100:.0f}%' if ink is not None else "")
             u = link(os.path.join(store.root, "maps", x["image"]))
             imgs.append(f'<figure style="display:inline-block;margin:4px"><a href="{u}" target="_blank">'
                         f'<img loading="lazy" src="{u}" height="110"></a><figcaption class="muted">{ESC(cap)}</figcaption></figure>')

@@ -12,7 +12,7 @@ import argparse
 import os
 from collections import Counter
 
-from . import area, killcam
+from . import area, clock, killcam
 from .storage import Store
 
 QUICK_DEATH = 8.0
@@ -118,7 +118,7 @@ def match_feedback(m, base, store=None):
         return [("情報", "普段の自分と比べるには、自分の枠が分かった試合があと少し必要です（10試合から）")]
     out = []
     mins = n["mins"]
-    times = lambda xs: "（" + "、".join(_mmss(x) for x in xs[:5]) + "）" if xs else ""
+    times = lambda xs: "（" + "、".join(clock.fmt(m, x) for x in xs[:5]) + "）" if xs else ""
 
     def compare(key, label, unit="回", bad_if_more=True, min_count=2):
         got, exp = len(n[key]), base[key] * mins
@@ -190,13 +190,16 @@ def match_feedback(m, base, store=None):
     return sorted(out, key=lambda x: order[x[0]])
 
 
-def for_latest(store, last=1):
-    """新しい試合から順に [(試合, 振り返り)]。"""
-    ms = sorted([m for m in store.matches() if m.get("video_end") and not m.get("interrupted")],
+def for_latest(store, last=1, all_modes=True):
+    """新しい試合から順に [(試合, 振り返り)]。普段の自分は、同じ種類（Xマッチ・それ以外）の前の試合から出す。
+    all_modes=False なら、設定の「見る記録」の試合だけを並べる。"""
+    from .storage import mode_of
+    ms = sorted([m for m in store.matches(all=all_modes) if m.get("video_end") and not m.get("interrupted")],
                 key=lambda m: m.get("played_at", ""))
     out = []
     for i in range(len(ms) - 1, max(len(ms) - 1 - last, -1), -1):
-        base = baseline(ms[:i])
+        same = [x for x in ms[:i] if mode_of(x) == mode_of(ms[i])]
+        base = baseline(same)
         out.append((ms[i], match_feedback(ms[i], base, store)))
     return out
 

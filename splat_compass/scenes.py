@@ -16,7 +16,7 @@ import os
 import pathlib
 import webbrowser
 
-from . import learning, winprob
+from . import clock, learning, winprob
 from .area import episodes as area_episodes
 from .objective import push_episodes
 from .storage import Store
@@ -131,18 +131,18 @@ def scene_sections(store, video_dir, last=None, link=file_link):
         for a, b, kind, desc in sc:
             if kind not in kinds:
                 kinds.append(kind)
-            label = f"{m.get('played_at', '')[:16].replace('T', ' ')} {m.get('rule') or ''} {_mmss(a - m['video_start'])} {desc}"
+            label = f"{m.get('played_at', '')[:16].replace('T', ' ')} {m.get('rule') or ''} {clock.fmt(m, a - m['video_start'])} {desc}"
             rows.append(
                 f'<div class="scene" data-kind="{html.escape(kind)}">'
                 f'<button onclick="{html.escape(f"play({json.dumps(src)}, {a:.1f}, {b:.1f}, {json.dumps(label, ensure_ascii=False)})", quote=True)}">再生</button>'
-                f'<span class="time">{_mmss(a - m["video_start"])}</span>'
+                f'<span class="time">{clock.fmt(m, a - m["video_start"])}</span>'
                 f'<span class="kind">{html.escape(kind)}</span><span>{html.escape(desc)}</span></div>')
         shots = m.get("map_shots") or []
         if shots:
             imgs = "".join(
                 f'<a href="{link(os.path.join(store.root, "maps", x["image"]))}" target="_blank">'
                 f'<img loading="lazy" src="{link(os.path.join(store.root, "maps", x["image"]))}" '
-                f'title="{_mmss(x["rel"])}" height="72" style="margin:2px"></a>' for x in shots)
+                f'title="{clock.fmt(m, x["rel"])}" height="72" style="margin:2px"></a>' for x in shots)
             rows.append(f'<div class="maps">マップ画面: {imgs}</div>')
         total += len(rows)
         res = m.get("result") or ""

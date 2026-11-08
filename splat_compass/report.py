@@ -13,7 +13,7 @@ from collections import defaultdict
 
 import numpy as np
 
-from . import analyze, area, coach, feedback, killcam, objective, scenes, weapons, winprob
+from . import analyze, area, clock, coach, feedback, killcam, objective, scenes, weapons, winprob
 from .storage import Store
 
 ESC = html.escape
@@ -471,7 +471,7 @@ def section_model(store, ms):
 def section_feedback(store, link=None, app=False):
     blocks = []
     color = {"気になる": "#c0392b", "良い": "#1a7f37", "情報": "#6b7280"}
-    for m, items in feedback.for_latest(store, 15):
+    for m, items in feedback.for_latest(store, 15, all_modes=False):
         res = m.get("result") or ""
         lis = "".join(f'<li><span class="tag" style="background:{color[k]}">{ESC(k)}</span>{ESC(t)}</li>' for k, t in items)
         fix = ""
@@ -490,7 +490,7 @@ def section_feedback(store, link=None, app=False):
         ds = coach.deaths(m, coach.wp_func(store, m)) or []
         dl = ""
         if ds:
-            trs = "".join(f'<tr><td>{coach._mmss(d["rel"])}</td><td style="text-align:left">{ESC(coach.describe(d))}</td></tr>' for d in ds)
+            trs = "".join(f'<tr><td>{clock.fmt(m, d["rel"])}</td><td style="text-align:left">{ESC(coach.describe(d))}</td></tr>' for d in ds)
             dl = (f'<details><summary class="muted">倒された場面 {len(ds)}回</summary>'
                   f'<table><tr><th>時刻</th><th style="text-align:left">そのときの状況</th></tr>{trs}</table></details>')
         blocks.append(f'<section><h2>{ESC(m.get("played_at", "")[:16].replace("T", " "))}　{ESC(m.get("rule") or "ルール不明")}　'
@@ -622,7 +622,8 @@ def render(store, video_dir=None, link=scenes.file_link, first_tabs=(), head="",
         except Exception as e:  # 1つの集計が失敗しても、ほかは見られるようにする
             body = f'<p class="muted">この集計を作れませんでした: {ESC(str(e))}</p>'
         bodies += f'<div class="tab{" on" if i == 0 else ""}" id="{k}">{body}</div>'
-    sub = f"{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点"
+    view = store.view()
+    sub = f"{view + ' ' if view else ''}{len(ms)}試合 ・ {dt.datetime.now():%Y-%m-%d %H:%M} 時点"
     return PAGE.format(subtitle=ESC(sub), tabs=nav, bodies=bodies, head=head, script=script)
 
 

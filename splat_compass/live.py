@@ -19,7 +19,7 @@ from .hud import DEAD, SLOT_NAMES, SPECIAL, StageReader
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
 from .tracker import END_TRIM, KIND_LABEL, Tracker
-from . import learning, winprob
+from . import clock, learning, winprob
 
 FPS = 10  # 1秒に読むコマ数（溜まってすぐ使うスペシャルを見落とさないよう、多めに読む）
 
@@ -104,7 +104,9 @@ def load_base(store):
     """普段の自分の1分あたりの回数。試合が少なければ None。"""
     try:
         from . import feedback
-        ms = sorted([m for m in store.matches() if m.get("video_end") and not m.get("interrupted")],
+        from .storage import mode_of
+        mode = store.mode()  # 今の試合と同じ種類の試合で「普段」を出す
+        ms = sorted([m for m in store.matches(all=True) if m.get("video_end") and not m.get("interrupted") and mode_of(m) == mode],
                     key=lambda m: m.get("played_at", ""))
         return feedback.baseline(ms)
     except Exception:
@@ -159,7 +161,8 @@ def status_dict(tr, t, base=None):
     if not tr.in_match:
         return {"in_match": False, "pending": tr.finished is not None}
     m = tr.match
-    d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1),
+    d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1), "clock": clock.fmt(m, t - m.start),
+         "stage": m.stage,
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,
          "counts": m.timeline[-1][1:3] if m.timeline else None, "kills": len(m.kills),
@@ -262,7 +265,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
     def on_event(m, e):
         notices.event(m, e)
         if e.slot == m.me_slot or e.kind in ("dead", "dead_with_special"):
-            out_q.put(("log", f"{int(e.rel)//60}:{int(e.rel)%60:02d} {e.slot} {KIND_LABEL[e.kind]}"))
+            out_q.put(("log", f"{clock.fmt(m, e.rel)} {e.slot} {KIND_LABEL[e.kind]}"))
 
     def on_end(m):
         if m.end is not None:  # 終わりの演出中に読んだ分は捨てたので、グラフからも消す
@@ -280,7 +283,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
         def after():  # 振り返りは少し重いので、読み取りを止めないよう別のスレッドで出す
             if m.rule == "ガチエリア" and model["m"] is not None:
                 for rel, what, d in learning.swings(model["m"], store.load(p)):
-                    out_q.put(("log", f"  勝率が大きく動いた場面: {int(rel) // 60}:{int(rel) % 60:02d} {what}（{d * 100:+.0f}%）"))
+                    out_q.put(("log", f"  勝率が大きく動いた場面: {clock.fmt(m, rel)} {what}（{d * 100:+.0f}%）"))
             try:
                 from . import feedback
                 lines = feedback.for_latest(store, 1)[0][1]
@@ -338,7 +341,7 @@ def worker(frames, store, source, out_q, stop, cmds=None):
             last_status = time.time()
         if start is not None and len(tr.match.kills) > kills_seen:
             rel = tr.match.kills[-1] - start
-            out_q.put(("log", f"{int(rel) // 60}:{int(rel) % 60:02d} 倒した（{len(tr.match.kills)}人目）"))
+            out_q.put(("log", f"{clock.fmt(tr.match, rel)} 倒した（{len(tr.match.kills)}人目）"))
         kills_seen = len(tr.match.kills) if start is not None else 0
         if start is not None and wsent != start:
             icons = tr.match.icons

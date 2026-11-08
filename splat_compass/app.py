@@ -45,6 +45,7 @@ class State:
         self.version = 0      # まとめが変わるたびに増える（画面が読み直す合図）
         self.reading = False  # 映像を読んでいるか
         self.can_start = False  # 画面からカメラを選んで読み始められるか
+        self.mode, self.view = "Xマッチ", "Xマッチ"  # これから保存する試合の種類、まとめで見る記録
 
     def _write(self, text):
         if not self.log_dir:
@@ -94,7 +95,7 @@ class State:
     def snapshot(self, since):
         with self.lock:
             return {"state": self.state, "wp": self.wp, "wp_kind": self.wp_kind, "reading": self.reading,
-                    "can_start": self.can_start,
+                    "can_start": self.can_start, "mode": self.mode, "view": self.view,
                     "weapons": self.weapons, "weapons_file": self.weapons_file, "last_saved": self.last_saved,
                     "version": self.version, "seq": self.seq,
                     "logs": [(i, t) for i, t, _ in self.logs if i > since],
@@ -108,6 +109,9 @@ LIVE_HTML = """
   <button id="compact" class="btn">小さくする</button>
 </div>
 <div id="notice" class="notice"></div>
+<div class="modebar">この試合の記録: <button class="btn mode" data-mode="Xマッチ" onclick="setConfig({mode:'Xマッチ'})">Xマッチ</button>
+  <button class="btn mode" data-mode="それ以外" onclick="setConfig({mode:'それ以外'})">それ以外</button>
+  <span class="muted">（本気でやる記録とそうでない記録を分けます。保存するときの選択で記録します）</span></div>
 <div id="reloadbar" class="reloadbar">まとめが新しくなりました <button class="btn" onclick="location.reload()">読み直す</button></div>
 <div id="campick" class="card campick"><h3>読み取るカメラ</h3>
   <p class="muted">キャプチャーボードや OBS の仮想カメラを選んでください。スプラトゥーンの画面が映っているものを選びます。</p>
@@ -141,6 +145,8 @@ APP_CSS = """<style>
 .btn { border:1px solid #d1d5db; background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:13px; }
 .lv-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
 .wpbig { font-size:40px; font-weight:bold; line-height:1.1; }
+.modebar { margin-bottom:10px; } .btn.mode.on { background:#1f6feb; color:#fff; border-color:#1f6feb; }
+.viewsel { position:absolute; right:16px; top:14px; font-size:13px; color:#fff; } .viewsel select { font-size:13px; }
 .reloadbar { display:none; margin-bottom:10px; color:#555; } .reloadbar.on { display:block; }
 .campick { display:none; margin-bottom:12px; } .campick.on { display:block; }
 .camlist { display:flex; flex-wrap:wrap; gap:10px; margin-top:8px; }
@@ -191,6 +197,24 @@ body.compact .logs { max-height:120px; }
 
 APP_JS = """<script>
 let since = 0, version = null, inMatch = false, lastShown = null;
+async function setConfig(c) {
+  const r = await fetch("/api/config", { method: "POST", body: JSON.stringify(c) });
+  if (!r.ok) { alert(await r.text()); return; }
+  if (c.view !== undefined) location.reload();  // 見る記録を変えたら、まとめを作り直す
+}
+async function setMatchMode(file, mode) {
+  const r = await fetch("/api/match_mode", { method: "POST", body: JSON.stringify({ file: file, mode: mode }) });
+  if (r.ok) loadLast(file); else alert(await r.text());
+}
+(function () {  // 見る記録の切り替えを、ページの上に置く
+  const h = document.querySelector("header");
+  if (!h) return;
+  h.style.position = "relative";
+  const d = document.createElement("div"); d.className = "viewsel";
+  d.innerHTML = '見る記録 <select id="viewsel" onchange="setConfig({view: this.value})">' +
+    '<option value="Xマッチ">Xマッチだけ</option><option value="それ以外">それ以外だけ</option><option value="すべて">すべて</option></select>';
+  h.appendChild(d);
+})();
 async function setStage(file, name) {
   const r = await fetch("/api/stage", { method: "POST", body: JSON.stringify({ file: file, name: name.trim() }) });
   if (r.ok) loadLast(file); else alert(await r.text());
@@ -283,9 +307,11 @@ function showState(d) {
       k = `<br>倒した ${pc.kills}人 ／ 倒された <span style="${warn ? "color:#c0392b;font-weight:bold" : ""}">${pc.deaths}回</span>${usual}`;
     }
     const ink = st.ink ? `<br>塗り 味方 ${Math.round(st.ink[0] * 100)}%（${st.ink[1]}秒前のマップ）` : "";
-    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}　${mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
+    $("matchinfo").innerHTML = `${st.rule || "ルール不明"}${st.stage ? "　" + st.stage : ""}　${st.clock ? (st.clock.startsWith("延長") ? st.clock : "残り " + st.clock) : mmss(st.elapsed)}<br>${c}${me}${k}${ink}`;
   }
   $("campick").classList.toggle("on", !d.reading && d.can_start);
+  document.querySelectorAll(".btn.mode").forEach(b => b.classList.toggle("on", b.dataset.mode === d.mode));
+  if ($("viewsel") && document.activeElement !== $("viewsel")) $("viewsel").value = d.view || "すべて";
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
   if (lastShown === null && $("last") && $("last").classList.contains("on")) { lastShown = d.last_saved || "first"; loadLast(); }
@@ -568,6 +594,27 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         self._send(400, err.encode("utf-8"), "text/plain; charset=utf-8")
                     else:
                         self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/config":
+                    from .storage import MODES
+                    cfg = store.load_config()
+                    if body.get("mode") in MODES:
+                        cfg["mode"] = body["mode"]
+                    if body.get("view") in MODES + ("すべて",):
+                        cfg["view"] = body["view"]
+                    store.save_config(cfg)
+                    with st.lock:
+                        st.mode, st.view = store.mode(), store.view() or "すべて"
+                        if "view" in body:
+                            st.version += 1  # まとめを作り直させる
+                    self._send(200, b"ok", "text/plain")
+                elif u.path == "/api/match_mode" and body.get("file"):
+                    from .storage import MODES
+                    if body.get("mode") not in MODES:
+                        raise ValueError("種類が違います")
+                    store.update(os.path.basename(str(body["file"])), {"mode": body["mode"]})
+                    with st.lock:
+                        st._push(st.logs, f"試合の種類を直しました: {body['file']} → {body['mode']}")
+                    self._send(200, b"ok", "text/plain")
                 elif u.path == "/api/stage" and body.get("file"):
                     from .hud import save_stage_label
                     f, name = os.path.basename(str(body["file"])), str(body.get("name", "")).strip() or None
@@ -702,6 +749,7 @@ def main():
     st = State(os.path.join(store.root, "logs"))
     files = sorted(f for f in os.listdir(store.mdir) if f.endswith(".json"))
     st.last_saved = files[-1][:-5] if files else None  # 起動前に保存した一番新しい試合も直せるように
+    st.mode, st.view = store.mode(), store.view() or "すべて"
     q = queue.Queue()
     threading.Thread(target=st.consume, args=(q,), daemon=True).start()
     stop = threading.Event()

@@ -10,7 +10,7 @@
 import argparse
 from collections import Counter
 
-from . import area
+from . import area, clock
 from .storage import Store
 
 QUICK = 8.0       # 復活してこの秒数以内に倒されたら「復活してすぐ」
@@ -178,13 +178,13 @@ def match_lines(m, history_shares=None, wp=None):
         usual = history_shares.get(k, (0, 0.0))[1] if history_shares else None
         # 普段より明らかに多いときだけ出す（普段の割合が分からなければ半分以上のとき）
         if (usual is not None and share >= usual * 1.6 + 0.1) or (usual is None and share >= 0.5):
-            times = "、".join(_mmss(d["rel"]) for d in ds if k in d["tags"])
+            times = "、".join(clock.fmt(m, d["rel"]) for d in ds if k in d["tags"])
             tail = f"（普段は {usual * 100:.0f}%）" if usual is not None else ""
             out.append(("気になる", f"倒された{n}回のうち{c[k]}回が「{label}」{tail} {times}"))
     big = sorted([d for d in ds if d["drop"] is not None and d["drop"] <= -BIG_DROP], key=lambda d: d["drop"])
     if big:
         d = big[0]
-        out.append(("気になる", f"一番響いたデス {_mmss(d['rel'])}: {describe(d)}"))
+        out.append(("気になる", f"一番響いたデス {clock.fmt(m, d['rel'])}: {describe(d)}"))
     if c["trade"] >= 2:
         out.append(("良い", f"倒してから倒された（相打ち）が{c['trade']}回。ただ倒されるよりは仕事ができています"))
     return out
@@ -219,7 +219,7 @@ def main():
     ms = sorted([m for m in store.matches() if m.get("video_end")], key=lambda m: m.get("played_at", ""))
     m = ms[-1]
     for d in deaths(m, wp_func(store, m)) or []:
-        print(_mmss(d["rel"]), describe(d))
+        print(clock.fmt(m, d["rel"]), describe(d))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,12 @@ import os
 from .tracker import ROW_HEADER
 
 DEFAULT_DIR = os.path.join(os.path.expanduser("~"), "splat-compass-data")
+MODES = ("Xマッチ", "それ以外")  # 本気でやる記録（Xマッチ）と、そうでない記録（バンカラ・ナワバリ・練習など）を分ける
+
+
+def mode_of(m):
+    """試合の種類。種類を記録する前の試合は Xマッチとみなす。"""
+    return m.get("mode") or "Xマッチ"
 
 
 class Store:
@@ -82,6 +88,8 @@ class Store:
             "video_end": round(m.end, 1) if m.end is not None else None,
             "rule": m.rule,
             "stage": getattr(m, "stage", None),
+            "mode": getattr(m, "mode", None) or self.mode(),
+            "go": getattr(m, "go", None),
             "result": m.result,
             "interrupted": m.interrupted,
             "me_slot": m.me_slot,
@@ -104,14 +112,29 @@ class Store:
             json.dump(data, f, ensure_ascii=False, indent=1)
         return path
 
-    def matches(self):
+    def matches(self, all=False):
+        """試合の記録の一覧。設定の「見る記録」（Xマッチだけ・それ以外だけ）で絞る。all=True なら絞らない
+        （勝率モデルやブキの見本は、どの試合でも同じように使えるので全部使う）。"""
+        view = None if all else self.view()
         out = []
         for p in sorted(glob.glob(os.path.join(self.mdir, "*.json"))):
             with open(p, encoding="utf-8") as f:
                 d = json.load(f)
             d["_file"] = os.path.basename(p)
+            if view and mode_of(d) != view:
+                continue
             out.append(d)
         return out
+
+    def view(self):
+        """まとめや振り返りで見る記録の種類（"Xマッチ" / "それ以外"）。None なら全部。"""
+        v = self.load_config().get("view", "Xマッチ")
+        return v if v in MODES else None
+
+    def mode(self):
+        """これから保存する試合の種類（画面で切り替える）。"""
+        v = self.load_config().get("mode", "Xマッチ")
+        return v if v in MODES else "Xマッチ"
 
     def set_result(self, fname, result):
         """勝敗を手で直す（読み違えていたとき）。"""

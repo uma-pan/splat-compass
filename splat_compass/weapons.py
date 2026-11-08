@@ -125,7 +125,7 @@ def all_icons(store, ms=None):
     始まりの時刻が変わったときなど）も見本として入れる。付けた名前が使われなくなるのを防ぐため。"""
     out = []
     seen = set()
-    for m in ms if ms is not None else store.matches():
+    for m in ms if ms is not None else store.matches(all=True):
         icons = load_strip(store, m)
         if not icons:
             continue
@@ -287,7 +287,7 @@ def review(store, last=20):
 # ---------- 前の録画から切り出す ----------
 def extract_past(store, video_dir, redo=False):
     n = 0
-    for m in store.matches():
+    for m in store.matches(all=True):
         if m.get("weapon_icons") and not redo:
             continue
         src = m.get("source") or ""
@@ -396,7 +396,7 @@ class Pool:
 
     def __init__(self, store):
         self.store = store
-        self.items = all_icons(store, store.matches())  # 名前付けの画面は今の試合の絵だけ
+        self.items = all_icons(store, store.matches(all=True))  # 名前付けの画面は今の試合の絵だけ
         self.labels = load_labels(store)
         self.F = np.array([feature(it[1]) for it in self.items]) if self.items else np.zeros((0, 1))
         kl, kp = killcam.load_labels(store)

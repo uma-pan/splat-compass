@@ -410,7 +410,7 @@ def main():
     ap.add_argument("--data", help="記録の保存先")
     a = ap.parse_args()
     store = Store(a.data)
-    report([m for m in store.matches() if not m.get("interrupted")])
+    report([m for m in store.matches(all=True) if not m.get("interrupted")])
     # 画面で使うモデルの作り直し・入れ替えは learning に任せる（学習に使った試合を覚えておくため）
     from . import learning
     learning.retrain(store)

@@ -21,7 +21,7 @@ TOLERANCE = 0.01  # 対数損失がこれ以上悪くならなければ入れ替
 
 
 def usable(store):
-    ms = [m for m in store.matches() if m.get("rule") == "ガチエリア" and m.get("timeline")
+    ms = [m for m in store.matches(all=True) if m.get("rule") == "ガチエリア" and m.get("timeline")
           and m.get("result") in ("勝ち", "負け") and not m.get("interrupted")]
     return sorted(ms, key=lambda m: m.get("played_at", ""))
 

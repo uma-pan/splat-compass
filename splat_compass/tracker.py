@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import cv2
 
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, me_respawning, me_special_full,
-                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -69,6 +69,7 @@ class Match:
     end: float = None
     rule: str = None
     stage: str = None   # ステージ名（試合前のルールの表示から）
+    go: float = None    # 残り時間が減り始めた時刻（GO）
     stage_crop: object = None  # ステージの名前の部分の画像（RGB）。名前が分からないときに手で付けられるよう残す
     result: str = None
     result_check: tuple = None  # 勝敗を決めた画面の縮小画像と一致度（読み違いを確かめる用）
@@ -92,6 +93,7 @@ class Match:
 class Tracker:
     def __init__(self, fps, on_event=None, on_match_end=None, on_log=None, stage_reader=None):
         self.stage_reader = stage_reader  # hud.StageReader（無ければステージは読まない）
+        self.go_ref = None  # 試合の始めの 5:00 の数字の形（GO を決めるため）
         self.stage_best = None  # ルールの表示の間で、ステージの名前が一番くっきり見えたコマ (縁の強さ, 切り出し, 時刻)
         self.on_log = on_log or (lambda text: None)  # 試合の始まり・終わりを決めた理由（あとで確かめる用）
         self.fps = fps
@@ -174,6 +176,7 @@ class Tracker:
         # 残り時間の表示で、本当に試合中かを確かめる（試合後の画面を8人の表示と読み違えて続いてしまうのを防ぐ）
         if hud_visible(img):
             self.timer_seen = t
+            self._watch_go(t, img)
         elif self.timer_seen is None and t - self.match.start > NO_TIMER_START:
             self.on_log("残り時間の表示が一度も出ないので、試合ではなかったとみなします")
             self.match, self.cur = None, None  # 一度も残り時間が出ない＝試合ではなかった
@@ -337,6 +340,29 @@ class Tracker:
         self.timer_seen = None
         self.kill_n, self.kill_pend, self.kill_pend_n = 0, 0, 0
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
+
+    def _watch_go(self, t, img):
+        """残り時間が 5:00 から 4:59 に変わった時刻から、残り時間が減り始めた時刻（GO）を決める。
+        始まってすぐの 5:00 の数字の形を覚えておき、形が変わったらそれが 4:59。GO はその1秒前。"""
+        m = self.match
+        if m.go is not None or t - m.start > 15:
+            return
+        x, y, w, h = TIMER_BOX
+        digits = img[y:y + h, x:x + w].min(axis=2) > 200
+        if digits.mean() < 0.03:  # 数字が見えていない（演出で隠れているなど）
+            return
+        if self.go_ref is None or self.go_ref[0] != m.start:
+            self.go_ref = (m.start, digits, 0)
+            return
+        diff = (digits != self.go_ref[1]).mean()
+        similar_amount = abs(digits.mean() - self.go_ref[1].mean()) < 0.4 * self.go_ref[1].mean()  # 演出で白く隠れたのではない
+        if diff > 0.04 and similar_amount:  # 数字が変わった。続けて2回変わっていたら確か
+            n = self.go_ref[2] + 1
+            self.go_ref = (m.start, self.go_ref[1], n)
+            if n >= 2:
+                m.go = round(t - 1.0 - 0.1 * (n - 1), 1)
+        else:
+            self.go_ref = (m.start, self.go_ref[1], 0)
 
     def _gauge_vote(self, full):
         """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""
