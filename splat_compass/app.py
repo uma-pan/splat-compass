@@ -85,7 +85,7 @@ class State:
                 elif kind == "log":
                     self._push(self.logs, msg)
                     self._write(msg)
-                elif kind in ("saved", "report"):
+                elif kind == "report":  # 試合後の学習とまとめが終わったら、画面を読み直させる
                     self.version += 1
                 elif kind == "end":
                     self.reading = False

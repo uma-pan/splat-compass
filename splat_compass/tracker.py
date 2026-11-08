@@ -292,6 +292,13 @@ class Tracker:
             res = self._result_seen(img)
             if res:
                 self._set_result(self.finished, res, img)
+            showing = self.res_prev
+        else:
+            showing = self.screens.result(img)[0]
+        if showing:
+            # 勝敗の画面にも8人が並んで見えることがある。勝敗の画面が出ている間は試合を始めない
+            self.on_n = 0
+            return
         if known >= 6:
             self.on_n += 1
             if self.on_n >= START_FRAMES:

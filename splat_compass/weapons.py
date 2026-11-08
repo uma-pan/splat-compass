@@ -182,12 +182,24 @@ class Namer:
         return n if s >= AUTO else None
 
 
+_SHARED = {}
+
+
+def shared_namer(store):
+    """Namer を作るのは重い（全部の絵を読む）ので、名前の記録と絵の数が変わらない間は使い回す。"""
+    d = _dir(store)
+    key = (store.root, labels_mtime(store), len(os.listdir(d)) if os.path.isdir(d) else 0)
+    if _SHARED.get("key") != key:
+        _SHARED["namer"], _SHARED["key"] = Namer(store), key
+    return _SHARED["namer"]
+
+
 def weapons_of(store, m, namer=None):
     """試合の8人のブキの名前（分からない枠は None）。"""
     icons = load_strip(store, m)
     if not icons:
         return None
-    namer = namer or Namer(store)
+    namer = namer or shared_namer(store)
     return [namer.name(key_of(m, k), ic) if ic is not None else None for k, ic in enumerate(icons)]
 
 

@@ -216,17 +216,42 @@ def worker(frames, store, source, out_q, stop, cmds=None):
     model = {"m": winprob.load_model(store)}
     models = {"area": model["m"], "simple": winprob.load_simple(store)}
 
+    busy = {"bg": False, "again": False}
+
     def retrain_bg():
+        """勝率モデルの学習のやり直しとまとめのページの作り直しを、別のプロセスで動かす。
+        同じプロセスで動かすと、試合中の読み取りと計算を取り合って、次の試合の読み取りが遅れるため。"""
+        if busy["bg"]:
+            busy["again"] = True  # 今のが終わったら、もう一度やる
+            return
+        busy["bg"] = True
+
         def run():
-            learning.retrain(store, log=lambda s: out_q.put(("log", s)))
-            model["m"] = winprob.load_model(store)
-            models.update(area=model["m"], simple=winprob.load_simple(store))
-            try:  # まとめのページも作り直しておく
-                from . import report
-                report.build(store, store.load_config().get("video_dir"))
-                out_q.put(("report", None))
+            import subprocess
+            import sys
+            try:
+                flags = 0x00004000 if os.name == "nt" else 0  # Windows では優先度を下げる（BELOW_NORMAL）
+                p = subprocess.Popen([sys.executable, "-m", "splat_compass.after_match", "--data", store.root],
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace", creationflags=flags,
+                                     env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                                     cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                for line in p.stdout:
+                    line = line.rstrip()
+                    if line == "@report":
+                        out_q.put(("report", None))
+                    elif line:
+                        out_q.put(("log", line))
+                p.wait()
+                model["m"] = winprob.load_model(store)
+                models.update(area=model["m"], simple=winprob.load_simple(store))
             except Exception as e:
-                out_q.put(("log", f"まとめのページを作れませんでした: {e}"))
+                out_q.put(("log", f"試合後の学習のやり直しができませんでした: {e}"))
+            finally:
+                busy["bg"] = False
+                if busy["again"]:
+                    busy["again"] = False
+                    retrain_bg()
         threading.Thread(target=run, daemon=True).start()
 
     def on_event(m, e):
@@ -246,18 +271,22 @@ def worker(frames, store, source, out_q, stop, cmds=None):
         res = m.result or "勝敗不明（中断扱い）"
         out_q.put(("log", f"試合終了: {m.rule or 'ルール不明'} / {res} → 保存しました"))
         out_q.put(("saved", p))
-        if m.rule == "ガチエリア" and model["m"] is not None:
-            for rel, what, d in learning.swings(model["m"], store.load(p)):
-                out_q.put(("log", f"  勝率が大きく動いた場面: {int(rel) // 60}:{int(rel) % 60:02d} {what}（{d * 100:+.0f}%）"))
-        try:
-            from . import feedback
-            out_q.put(("log", "この試合の振り返り:"))
-            for kind, text in feedback.for_latest(store, 1)[0][1]:
-                out_q.put(("log", f"  [{kind}] {text}"))
-        except Exception as e:
-            out_q.put(("log", f"振り返りを出せませんでした: {e}"))
-        notices.base = load_base(store)
-        retrain_bg()
+
+        def after():  # 振り返りは少し重いので、読み取りを止めないよう別のスレッドで出す
+            if m.rule == "ガチエリア" and model["m"] is not None:
+                for rel, what, d in learning.swings(model["m"], store.load(p)):
+                    out_q.put(("log", f"  勝率が大きく動いた場面: {int(rel) // 60}:{int(rel) % 60:02d} {what}（{d * 100:+.0f}%）"))
+            try:
+                from . import feedback
+                lines = feedback.for_latest(store, 1)[0][1]
+                out_q.put(("log", "この試合の振り返り:"))
+                for kind, text in lines:
+                    out_q.put(("log", f"  [{kind}] {text}"))
+            except Exception as e:
+                out_q.put(("log", f"振り返りを出せませんでした: {e}"))
+            notices.base = load_base(store)
+            retrain_bg()
+        threading.Thread(target=after, daemon=True).start()
 
     began = time.time()
     def on_log(text):

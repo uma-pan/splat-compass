@@ -47,7 +47,22 @@ def _row_at(tl, t):
     return row
 
 
+_CACHE = {}
+
+
 def deaths(m, wp=None):
+    """deaths の中身。勝率を使わないときは、同じ試合を何度も調べないよう覚えておく（振り返りで全試合を何度も見るため）。"""
+    if wp is not None:
+        return _deaths(m, wp)
+    key = (m.get("_file"), len(m.get("events") or []), m.get("video_end"), m.get("me_slot"))
+    if key[0] is None:
+        return _deaths(m, None)
+    if key not in _CACHE:
+        _CACHE[key] = _deaths(m, None)
+    return _CACHE[key]
+
+
+def _deaths(m, wp=None):
     """自分が倒された1回ずつ: [{rel, tags, main, ally, enemy, drop, held, since_respawn}]。自分の枠が分からなければ None。
     wp: 時刻 → 勝率 の関数（無ければ勝率の動きは出さない）。"""
     me = m.get("me_slot")
@@ -98,12 +113,26 @@ def deaths(m, wp=None):
     return out
 
 
+_MODEL = {}
+
+
+def _area_model(store):
+    """勝率モデルを、ファイルが変わったときだけ読み直す。"""
+    import os
+    from . import winprob
+    p = os.path.join(store.root, "winprob_area.json")
+    mt = os.path.getmtime(p) if os.path.exists(p) else None
+    if _MODEL.get("mt") != mt or "m" not in _MODEL:
+        _MODEL["m"], _MODEL["mt"] = winprob.load_model(store), mt
+    return _MODEL["m"]
+
+
 def wp_func(store, m):
     """試合の毎秒の勝率から、時刻 → 勝率 の関数を作る。出せなければ None。"""
     try:
         import numpy as np
         from . import learning
-        pr = learning.predict_match(store, m)
+        pr = learning.predict_match(store, m, _area_model(store) if m.get("rule") == "ガチエリア" else None)
     except Exception:
         return None
     if pr is None:

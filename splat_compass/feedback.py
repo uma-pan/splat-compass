@@ -24,7 +24,20 @@ def _mmss(sec):
     return f"{sec // 60}:{sec % 60:02d}"
 
 
+_NUM = {}
+
+
 def _numbers(m):
+    """_numbers の中身を、同じ試合なら覚えておいて使い回す（振り返りでは前の全試合を何度も見るため）。"""
+    key = (m.get("_file"), len(m.get("events") or []), m.get("video_end"), m.get("me_slot"), len(m.get("kills") or []))
+    if key[0] is None:
+        return _numbers_of(m)
+    if key not in _NUM:
+        _NUM[key] = _numbers_of(m)
+    return _NUM[key]
+
+
+def _numbers_of(m):
     """1試合の数字（自分の枠が分かる試合だけ）。"""
     me = m.get("me_slot")
     if not me:

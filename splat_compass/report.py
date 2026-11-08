@@ -236,7 +236,7 @@ def section_rules(ms, store=None):
 def special_card(store, eps):
     """エリアの打開で、味方のスペシャルの種類ごとに、早めに使ったときと使わなかったときの成功率を比べる。"""
     from .weapon_info import Info
-    namer, info = weapons.Namer(store), Info(store)
+    namer, info = weapons.shared_namer(store), Info(store)
 
     def specials_of(m):
         names = weapons.weapons_of(store, m, namer)
@@ -314,7 +314,7 @@ def section_statink(store, ms, st):
                + '<p class="muted">世界の勝率が50%より高いのに、自分が負けた割合がもっと高いブキは、自分が特に苦手な相手かもしれません。</p>')
     # 編成だけで見た勝率が、自分の試合の勝ち負けを言い当てるか
     comp = []
-    namer = weapons.Namer(store)
+    namer = weapons.shared_namer(store)
     for m in ms:
         if m.get("result") not in ("勝ち", "負け") or not m.get("me_slot") or not m.get("rule"):
             continue
