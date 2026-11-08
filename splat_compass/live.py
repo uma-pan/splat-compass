@@ -54,6 +54,8 @@ class Notices:
         if p is None or t - tr.match.start < self.PACE_FROM:
             return
         deaths, exp = p["deaths"], p["deaths_usual"]
+        if exp is None:  # 普段の自分がまだ出せない（同じ種類の試合が少ない）
+            return
         if deaths >= 3 and deaths >= exp * 1.5 + 1 and deaths >= self.pace_warned + 2:
             self.pace_warned = deaths
             self.once.append(f"デスが多め {deaths}回（普段なら {exp:.1f}回くらい）")
@@ -327,8 +329,13 @@ def worker(frames, store, source, out_q, stop, cmds=None):
                 else:
                     out_q.put(("log", "終える試合がありません"))
         tr.feed(t, img)
-        for n in notices.check(tr, t):
-            out_q.put(("notice", n))
+        try:  # 通知は失敗しても、読み取りは止めない
+            for n in notices.check(tr, t):
+                out_q.put(("notice", n))
+        except Exception as e:
+            if not getattr(notices, "err_shown", False):
+                notices.err_shown = True
+                out_q.put(("log", f"通知を出せませんでした: {e}"))
         start = tr.match.start if tr.match is not None else None
         if start != cur_start:
             cur_start = start
