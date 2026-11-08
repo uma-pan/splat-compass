@@ -130,6 +130,13 @@ LIVE_HTML = """
 """
 
 APP_CSS = """<style>
+.lm-head { margin-bottom:8px; } .lm-head select { font-size:14px; padding:4px; }
+.lm-title { font-size:20px; margin:6px 0 10px; }
+.lm-nums { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:12px; }
+.lm-num { background:#fff; border-radius:10px; padding:8px 14px; min-width:110px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.lm-num .v { font-size:28px; font-weight:bold; }
+.lm-num.good .v, td.good { color:#1a7f37; } .lm-num.bad .v, td.bad { color:#c0392b; }
+#last .card { margin-bottom:12px; } #last td, #last th { white-space:nowrap; } #last td[style*='left'] { white-space:normal; }
 .btn { border:1px solid #d1d5db; background:#fff; border-radius:6px; padding:6px 12px; cursor:pointer; font-family:inherit; font-size:13px; }
 .lv-top { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:6px; }
 .wpbig { font-size:40px; font-weight:bold; line-height:1.1; }
@@ -182,7 +189,26 @@ body.compact .logs { max-height:120px; }
 </style>"""
 
 APP_JS = """<script>
-let since = 0, version = null, inMatch = false;
+let since = 0, version = null, inMatch = false, lastShown = null;
+async function loadLast(file) {
+  const box = $("lastbody");
+  box.innerHTML = '<p class="muted">読み込んでいます…</p>';
+  const r = await fetch("/api/last" + (file ? "?file=" + encodeURIComponent(file) : ""));
+  box.innerHTML = await r.text();
+}
+let lmStop = null;
+function lmPlay(src, a, b, label) {
+  const v = $("lv"); if (!v) return;
+  if (v.getAttribute("src") !== src) v.setAttribute("src", src);
+  const go = () => { v.currentTime = Math.max(0, a); v.play(); };
+  if (v.readyState >= 1) go(); else v.addEventListener("loadedmetadata", go, { once: true });
+  lmStop = b; $("lvnow").textContent = label;
+  if (!v._lm) { v._lm = true; v.addEventListener("timeupdate", () => { if (lmStop !== null && v.currentTime >= lmStop) { v.pause(); lmStop = null; } }); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest && e.target.closest('nav button[data-tab="last"]');
+  if (b && lastShown === null) { lastShown = "first"; loadLast(); }
+});
 async function findCameras() {
   $("camlist").textContent = "探しています…（数秒かかります）";
   const cams = await (await fetch("/api/cameras")).json();
@@ -257,6 +283,11 @@ function showState(d) {
   $("campick").classList.toggle("on", !d.reading && d.can_start);
   $("endbox").classList.toggle("on", !!(d.reading && (st.in_match || st.pending)));
   $("lastbox").classList.toggle("on", !!(d.last_saved && !st.in_match && !st.pending));
+  if (lastShown === null && $("last") && $("last").classList.contains("on")) { lastShown = d.last_saved || "first"; loadLast(); }
+  // 新しい試合が保存されたら、「直前の試合」タブをその試合に入れ替える（試合中は作らない）
+  if (d.last_saved && lastShown !== null && lastShown !== d.last_saved && !st.in_match) {
+    lastShown = d.last_saved; if ($("last").classList.contains("on")) loadLast(); else lastShown = null;
+  }
   if (d.last_saved) $("lastlabel").textContent = "直前の試合（" + d.last_saved.slice(9, 11) + ":" + d.last_saved.slice(11, 13) + " 開始）";
   let html = "", alive = "";
   if (st.in_match && st.slots) {
@@ -453,7 +484,9 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                  os.path.getmtime(info_p) if os.path.exists(info_p) else 0, statink.summary_mtime(store))
         if cache["version"] != v:
             cache["html"] = report.render(store, get_video_dir(), link=link,
-                                          first_tabs=[("live", "試合中", LIVE_HTML), ("wcheck", "ブキの確認", review_html(store, link))],
+                                          first_tabs=[("live", "試合中", LIVE_HTML),
+                                                      ("last", "直前の試合", '<div id="lastbody"><p class="muted">読み込んでいます…</p></div>'),
+                                                      ("wcheck", "ブキの確認", review_html(store, link))],
                                           head=APP_CSS, script=APP_JS)
             cache["version"] = v
         return cache["html"]
@@ -488,6 +521,14 @@ def make_handler(store, get_video_dir, st, cmds, start_camera=None):
                         out.append({"index": i, "w": w, "h": h,
                                     "img": "data:image/jpeg;base64," + base64.b64encode(buf.tobytes()).decode() if ok else ""})
                     self._send(200, json.dumps(out).encode("utf-8"), "application/json")
+                elif u.path == "/api/last":
+                    from . import lastmatch
+                    f = urllib.parse.parse_qs(u.query).get("file", [None])[0]
+                    try:
+                        body = lastmatch.html_for(store, link, get_video_dir(), f)
+                    except Exception as e:
+                        body = f'<p class="muted">作れませんでした: {report.ESC(str(e))}</p>'
+                    self._send(200, body.encode("utf-8"), "text/html; charset=utf-8")
                 elif u.path == "/api/live":
                     since = int(urllib.parse.parse_qs(u.query).get("since", ["0"])[0])
                     self._send(200, json.dumps(st.snapshot(since), ensure_ascii=False).encode("utf-8"),
