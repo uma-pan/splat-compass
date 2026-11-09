@@ -18,7 +18,7 @@ import numpy as np
 from .hud import DEAD, SLOT_NAMES, SPECIAL, StageReader
 from .sources import camera_frames, list_cameras, video_frames
 from .storage import Store
-from .tracker import END_TRIM, KIND_LABEL, Tracker
+from .tracker import CLOCK_SYNC_WINDOW, END_TRIM, KIND_LABEL, Tracker
 from . import clock, learning, winprob
 
 COUNT_MAX_AGE = 2.5
@@ -163,7 +163,9 @@ def status_dict(tr, t, base=None):
     if not tr.in_match:
         return {"in_match": False, "pending": tr.finished is not None}
     m = tr.match
-    d = {"in_match": True, "rule": m.rule, "elapsed": round(t - m.start, 1), "clock": clock.fmt(m, t - m.start),
+    elapsed = t - m.start
+    clock_text = "--:--" if m.go is None and elapsed <= CLOCK_SYNC_WINDOW else clock.fmt(m, elapsed)
+    d = {"in_match": True, "rule": m.rule, "elapsed": round(elapsed, 1), "clock": clock_text,
          "stage": m.stage,
          "slots": list(tr.cur) if tr.cur else None, "me": tr.me_index,
          "hold": round(t - tr.special_since, 1) if tr.special_since is not None else None,

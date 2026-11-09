@@ -8,9 +8,9 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-from .clock import TURF_RULE
+from .clock import TURF_RULE, length as clock_length
 from .hud import (ALIVE, DEAD, SLOT_NAMES, SPECIAL, ScreenReader, asari_goal_open, asari_slots, me_respawning, me_special_full, read_asari_clams,
-                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, TIMER_BOX)
+                  bar_band, crop_icon, crop_killcam, hud_visible, read_bubble_counts, read_kill_notices, find_checkpoints, is_map_screen, read_map_ink, team_hues, stage_crop, stage_feat, read_counts, read_objective_pos, read_penalty, read_slots, read_timer)
 
 STABLE_DEAD = 0.6    # 「倒された」と読める状態がこの秒数続いたら倒されたとみなす
 STABLE_BACK = 0.3    # 倒されたあと、普通の表示がこの秒数続いたら復活とみなす
@@ -33,6 +33,8 @@ RESPAWN_AFTER = 8.0        # 復活待ち表示が出てから何秒以内に復
 FAKE_MATCH = 60.0    # これより短い区間は試合ではないとみなす（秒）
 NO_TIMER_START = 25.0  # 試合が始まってこの秒数のうちに残り時間が一度も出なければ、試合ではなかったとみなす
 NO_TIMER_END = 20.0    # 残り時間がこの秒数出ていなければ、試合は終わったとみなす（マップを長く開いていても切れないよう長め）
+CLOCK_SYNC_WINDOW = 30.0  # 開始演出やマップで時計が隠れても、序盤の数字から GO を合わせ直せる
+CLOCK_MAX_GAP = 0.4  # 数字が切り替わる前後をこの間隔以内で読めたときだけ、切り替わりの時刻に使う
 CP_FROM, CP_TO = 10.0, 50.0  # チェックポイントを探すために棒を集める区間（試合開始からの秒）
 RESULT_WAIT = 75.0   # 試合後に勝敗の表示を待つ秒数
 RULE_KEEP = 40.0     # 試合前に見たルール表示を覚えておく秒数
@@ -99,7 +101,6 @@ class Match:
 class Tracker:
     def __init__(self, fps, on_event=None, on_match_end=None, on_log=None, stage_reader=None):
         self.stage_reader = stage_reader  # hud.StageReader（無ければステージは読まない）
-        self.go_ref = None  # 試合の始めの 5:00 の数字の形（GO を決めるため）
         self.busy_t = -1e9  # 最後にマップ画面か復活待ちを見た時刻
         self.stage_best = None  # ルールの表示の間で、ステージの名前が一番くっきり見えたコマ (縁の強さ, 切り出し, 時刻)
         self.on_log = on_log or (lambda text: None)  # 試合の始まり・終わりを決めた理由（あとで確かめる用）
@@ -372,30 +373,34 @@ class Tracker:
         self.map_taken = False
         self.icon_caps = [[] for _ in range(8)]
         self.timer_seen = None
+        self.clock_sample = self.clock_edge = None
         self.kill_n, self.kill_pend, self.kill_pend_n = 0, 0, 0
         self.bub, self.bub_pend, self.bub_t, self.bub_seen = [100, 100], [None, None], [t, t], False
 
     def _watch_go(self, t, img):
-        """最初の残り時間（5:00 または 3:00）が変わる1秒前を GO とする。"""
+        """残り時間が1秒減る瞬間を2回捉え、逆算した GO が一致したら採用する。"""
         m = self.match
-        if m.go is not None or t - m.start > 15:
+        if m.go is not None or t - m.start > CLOCK_SYNC_WINDOW:
             return
-        x, y, w, h = TIMER_BOX
-        digits = img[y:y + h, x:x + w].min(axis=2) > 200
-        if digits.mean() < 0.03:  # 数字が見えていない（演出で隠れているなど）
+        remaining = read_timer(img)
+        if remaining is None:
             return
-        if self.go_ref is None or self.go_ref[0] != m.start:
-            self.go_ref = (m.start, digits, 0)
+        elapsed = clock_length(m) - remaining
+        if not 0 <= elapsed <= CLOCK_SYNC_WINDOW:
             return
-        diff = (digits != self.go_ref[1]).mean()
-        similar_amount = abs(digits.mean() - self.go_ref[1].mean()) < 0.4 * self.go_ref[1].mean()  # 演出で白く隠れたのではない
-        if diff > 0.04 and similar_amount:  # 数字が変わった。続けて2回変わっていたら確か
-            n = self.go_ref[2] + 1
-            self.go_ref = (m.start, self.go_ref[1], n)
-            if n >= 2:
-                m.go = round(t - 1.0 - 0.1 * (n - 1), 1)
-        else:
-            self.go_ref = (m.start, self.go_ref[1], 0)
+        prev = self.clock_sample
+        self.clock_sample = (t, remaining)
+        if prev is None or prev[1] != remaining + 1 or t - prev[0] > CLOCK_MAX_GAP:
+            return
+        # 秒が切り替わった時刻は前後のコマの間にある。その範囲から GO を逆算する。
+        lo, hi = prev[0] - elapsed, t - elapsed
+        edge = self.clock_edge
+        self.clock_edge = (elapsed, lo, hi)
+        if edge is None or edge[0] >= elapsed:
+            return
+        lo, hi = max(lo, edge[1]), min(hi, edge[2])
+        if lo <= hi + 0.1:  # キャプチャ時刻の小さなぶれは許す
+            m.go = round((lo + hi) / 2, 2)
 
     def _gauge_vote(self, full):
         """右上のゲージが満タンのときにスペシャルが溜まっている枠ほど、自分らしい。"""

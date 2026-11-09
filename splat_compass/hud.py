@@ -257,6 +257,32 @@ def _digit_protos():
     return _DIGITS
 
 
+def read_timer(img):
+    """白い残り時間の数字を秒で返す。演出で隠れているときは None。"""
+    x, y, w, h = TIMER_BOX
+    white = (img[y:y + h, x:x + w].min(axis=2) > 200).astype(np.uint8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(white)
+    protos = _digit_protos()
+    digits = []
+    for i in sorted(range(1, n), key=lambda i: stats[i, 0]):
+        x, y, w, h, area = stats[i]
+        if not (9 <= y <= 17 and 28 <= h <= 39 and 8 <= w <= 25 and area >= 80):
+            continue
+        glyph = (labels[y:y + h, x:x + w] == i).astype(np.float32)
+        glyph = cv2.resize(glyph, (20, 30), interpolation=cv2.INTER_AREA).ravel()
+        scores = sorted((float(((proto - glyph) ** 2).mean()), key) for key, proto in protos.items())
+        error, digit = scores[0]
+        if digit == "x" or error > 0.17 or scores[1][0] - error < 0.025:
+            return None
+        digits.append((x + w / 2, int(digit)))
+    if len(digits) != 3:
+        return None
+    (xm, m), (xt, tens), (xu, units) = digits
+    if not (27 <= xm <= 37 and 68 <= xt <= 78 and 92 <= xu <= 102 and tens < 6):
+        return None
+    return m * 60 + tens * 10 + units
+
+
 def _read_box(b):
     """箱の切り抜きから (数, 箱が色で塗られているか)。読めなければ (None, None)。"""
     b = b.astype(np.int16)
