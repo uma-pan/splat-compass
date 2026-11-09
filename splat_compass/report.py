@@ -119,24 +119,41 @@ def me_stats(ms):
     return out
 
 
+def kd_stats(matches):
+    """キルと自分のデスを両方数えられる試合だけで、合計キルを合計デスで割る。"""
+    eligible = [m for m in matches if m.get("me_slot") and isinstance(m.get("kills"), list)]
+    kills = sum(len(m["kills"]) for m in eligible)
+    deaths = sum(
+        e[2] == m["me_slot"] and "倒された" in e[3]
+        for m in eligible for e in m["events"]
+    )
+    value = num(kills / deaths, 2) if deaths else ("∞" if kills else "—")
+    detail = f"{kills}キル / {deaths}デス（{len(eligible)}試合）" if eligible else "対象試合なし"
+    return value, detail
+
+
 def section_overview(ms):
     known = [m for m in ms if m.get("result") in ("勝ち", "負け")]
     wins = sum(m["result"] == "勝ち" for m in known)
     recent = ms[-20:]
     a, r = me_stats(ms), me_stats(recent)
+    kd, kd_detail = kd_stats(ms)
+    recent_kd, recent_kd_detail = kd_stats(recent)
     first = ms[0].get("played_at", "")[:10] if ms else ""
     last = ms[-1].get("played_at", "")[:10] if ms else ""
     top = (stat("試合", f"{len(ms)}", f"{first} 〜 {last}")
            + stat("勝敗", f"{wins}勝{len(known) - wins}敗", f"勝率 {pct(wins / len(known)) if known else '—'}")
+           + stat("K/D（キル÷デス）", kd, kd_detail)
            + stat("1分あたりのデス", num(a.get("自分のデス（1分あたり）"), 2), f"直近20試合 {num(r.get('自分のデス（1分あたり）'), 2)}")
            + stat("1分あたりのスペシャル", num(a.get("自分のスペシャル発動（1分あたり）"), 2),
                   f"直近20試合 {num(r.get('自分のスペシャル発動（1分あたり）'), 2)}"))
-    km = [m for m in ms if "kills" in m and m.get("video_end")]
+    km = [m for m in ms if isinstance(m.get("kills"), list) and m.get("video_end")]
     if km:  # 倒した数は、読むようになってからの試合だけ
         mins = sum((m["video_end"] - m["video_start"]) / 60 for m in km)
         kr = sum(len(m["kills"]) for m in km) / mins
         top += stat("1分あたりの倒した数", num(kr, 2), f"{len(km)}試合分（1試合平均 {sum(len(m['kills']) for m in km) / len(km):.1f}人）")
-    rows = []
+    rows = [["K/D（キル÷デス）", f'{kd}<br><span class="muted">{kd_detail}</span>',
+             f'{recent_kd}<br><span class="muted">{recent_kd_detail}</span>']]
     for label, key, f in (("勝率", "勝率", pct), ("自分のデス（1分あたり）", "自分のデス（1分あたり）", lambda v: num(v, 2)),
                           ("自分のスペシャル発動（1分あたり）", "自分のスペシャル発動（1分あたり）", lambda v: num(v, 2)),
                           ("スペシャルを持ったまま倒された（1分あたり）", "自分がスペシャルを持ったまま倒された（1分あたり）", lambda v: num(v, 2)),
